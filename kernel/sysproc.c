@@ -7,6 +7,8 @@
 #include "proc.h"
 #include "vm.h"
 
+extern struct proc proc[NPROC];
+
 uint64
 sys_exit(void)
 {
@@ -109,4 +111,46 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+uint64
+sys_hello(void)
+{
+    struct proc *p = myproc();
+
+    printk("kernel: hello() called by pid %d (running in kernel)\n",
+           p->pid);
+
+    return 0;
+}
+uint64
+sys_procinfo(void)
+{
+  struct proc *p;
+  void *mem;
+
+  // Cấp phát một page bộ nhớ trong kernel
+  mem = kalloc();
+
+  if (mem == 0) {
+    printk("procinfo: kalloc failed\n");
+    return -1;
+  }
+
+  printk("=== Process Table ===\n");
+
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+
+    if (p->state != UNUSED) {
+      printk("pid=%d state=%d name=%s\n",
+             p->pid, p->state, p->name);
+    }
+
+    release(&p->lock);
+  }
+
+  // Giải phóng page vừa cấp phát
+  kfree(mem);
+
+  return 0;
 }
