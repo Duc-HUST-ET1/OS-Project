@@ -191,7 +191,8 @@ iinit()
   }
 }
 
-static struct inode *iget(uint dev, uint inum);
+static struct inode *
+iget(uint dev, uint inum);
 
 // Allocate an inode on device dev.
 // Mark it as allocated by  giving it type type.

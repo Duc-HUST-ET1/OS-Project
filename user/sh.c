@@ -49,10 +49,14 @@ struct backcmd {
   struct cmd *cmd;
 };
 
-int fork1(void); // Fork but panics on failure.
-void panic(char *);
-struct cmd *parsecmd(char *);
-void runcmd(struct cmd *) __attribute__((noreturn));
+int
+fork1(void); // Fork but panics on failure.
+void
+panic(char *);
+struct cmd *
+parsecmd(char *);
+void
+runcmd(struct cmd *) __attribute__((noreturn));
 
 // Execute cmd.  Never returns.
 void
@@ -325,10 +329,14 @@ peek(char **ps, char *es, char *toks)
   return *s && strchr(toks, *s);
 }
 
-struct cmd *parseline(char **, char *);
-struct cmd *parsepipe(char **, char *);
-struct cmd *parseexec(char **, char *);
-struct cmd *nulterminate(struct cmd *);
+struct cmd *
+parseline(char **, char *);
+struct cmd *
+parsepipe(char **, char *);
+struct cmd *
+parseexec(char **, char *);
+struct cmd *
+nulterminate(struct cmd *);
 
 struct cmd *
 parsecmd(char *s)
