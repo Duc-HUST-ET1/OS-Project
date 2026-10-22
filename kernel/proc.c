@@ -15,8 +15,10 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
-extern void forkret(void);
-static void freeproc(struct proc *p);
+extern void
+forkret(void);
+static void
+freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
