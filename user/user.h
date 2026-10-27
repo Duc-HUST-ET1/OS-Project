@@ -27,6 +27,8 @@ char *sys_sbrk(int, int);
 int pause(int);
 int uptime(void);
 int sync(void);
+int clone(void(*fcn)(void*), void *arg, void *stack);
+int join(void **stack);
 
 // ulib.c
 int stat(const char *, struct stat *);

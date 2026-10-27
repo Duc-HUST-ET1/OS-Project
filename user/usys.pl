@@ -45,3 +45,5 @@ entry("uptime");
 entry("sync");
 entry("hello");
 entry("procinfo");
+entry("clone");
+entry("join");
