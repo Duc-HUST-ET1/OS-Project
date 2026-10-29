@@ -15,8 +15,12 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
-extern void forkret(void);
-static void freeproc(struct proc *p);
+extern void
+forkret(void);
+static void
+freeproc(struct proc *p);
+static struct proc *
+allocproc(void);
 
 extern char trampoline[]; // trampoline.S
 
@@ -25,6 +29,7 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+static struct spinlock thread_vm_lock;
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -51,6 +56,7 @@ procinit(void)
 
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  initlock(&thread_vm_lock, "thread_vm");
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -89,6 +95,108 @@ myproc(void)
   return p;
 }
 
+// Allocate a schedulable context that shares the caller's user address space.
+// entry is a user executable address; stack points at the user startup record.
+// The child is published RUNNABLE only after its trapframe and metadata are
+// complete and its private trapframe mapping exists in the shared page table.
+int
+kthread_create(uint64 entry, uint64 stack, uint64 tls)
+{
+  struct proc *parent = myproc();
+  struct proc *np;
+  pagetable_t empty_pt;
+  pte_t *pte;
+  int fd, tid;
+
+  if ((stack & 15) != 0 || parent->sz < 2 * sizeof(uint64) ||
+      stack > parent->sz - 2 * sizeof(uint64) || entry >= parent->sz)
+    return -1;
+  pte = walk(parent->pagetable, entry, 0);
+  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_X)) !=
+                      (PTE_V | PTE_U | PTE_X))
+    return -1;
+  pte = walk(parent->pagetable, stack, 0);
+  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_W)) !=
+                      (PTE_V | PTE_U | PTE_W))
+    return -1;
+
+  if ((np = allocproc()) == 0)
+    return -1;
+
+  // Drop the empty private page table allocated by allocproc before attaching
+  // the child to the parent's address space.
+  empty_pt = np->pagetable;
+  np->pagetable = 0;
+  release(&np->lock);
+  proc_freepagetable(empty_pt, 0, np->trapframe_va);
+
+  acquire(&thread_vm_lock);
+  // Revalidate while page-table changes are serialized with sbrk/growproc.
+  if ((stack & 15) != 0 || parent->sz < 2 * sizeof(uint64) ||
+      stack > parent->sz - 2 * sizeof(uint64) || entry >= parent->sz) {
+    release(&thread_vm_lock);
+    acquire(&np->lock);
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  pte = walk(parent->pagetable, entry, 0);
+  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_X)) !=
+                      (PTE_V | PTE_U | PTE_X)) {
+    release(&thread_vm_lock);
+    acquire(&np->lock);
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  pte = walk(parent->pagetable, stack, 0);
+  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_W)) !=
+                      (PTE_V | PTE_U | PTE_W)) {
+    release(&thread_vm_lock);
+    acquire(&np->lock);
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  if (mappages(parent->pagetable, np->trapframe_va, PGSIZE,
+               (uint64)np->trapframe, PTE_R | PTE_W) < 0) {
+    release(&thread_vm_lock);
+    acquire(&np->lock);
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
+  np->pagetable = parent->pagetable;
+  np->sz = parent->sz;
+  np->owns_pagetable = 0;
+  np->is_thread = 1;
+  np->tgid = parent->tgid;
+  np->trapframe->epc = entry;
+  np->trapframe->sp = stack;
+  np->trapframe->tp = tls;
+  np->trapframe->a0 = 0;
+  asm volatile("sfence.vma zero, zero");
+  safestrcpy(np->name, parent->name, sizeof(np->name));
+  tid = np->pid;
+  release(&thread_vm_lock);
+
+  for (fd = 0; fd < NOFILE; fd++)
+    if (parent->ofile[fd])
+      np->ofile[fd] = filedup(parent->ofile[fd]);
+  np->cwd = idup(parent->cwd);
+
+  // Parent/child relationships are published under wait_lock, and the proc
+  // lock protects the final transition to scheduler-visible state.
+  acquire(&wait_lock);
+  acquire(&np->lock);
+  np->parent = parent;
+  np->state = RUNNABLE;
+  release(&np->lock);
+  release(&wait_lock);
+  return tid;
+}
+
 int
 allocpid()
 {
@@ -123,6 +231,11 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  p->tgid = p->pid;
+  p->is_thread = 0;
+  p->xstate64 = 0;
+  p->owns_pagetable = 1;
+  p->trapframe_va = TRAPFRAME_VA(p - proc);
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -155,18 +268,28 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  if (p->pagetable && p->owns_pagetable)
+    proc_freepagetable(p->pagetable, p->sz, p->trapframe_va);
+  else if (p->pagetable && p->is_thread) {
+    acquire(&thread_vm_lock);
+    uvmunmap(p->pagetable, p->trapframe_va, 1, 0);
+    release(&thread_vm_lock);
+  }
+  p->pagetable = 0;
+  p->owns_pagetable = 0;
   if (p->trapframe)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
-  if (p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
-  p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->name[0] = 0;
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->xstate64 = 0;
+  p->tgid = 0;
+  p->is_thread = 0;
+  p->trapframe_va = 0;
   p->state = UNUSED;
 }
 
@@ -194,7 +317,7 @@ proc_pagetable(struct proc *p)
 
   // map the trapframe page just below the trampoline page, for
   // trampoline.S.
-  if (mappages(pagetable, TRAPFRAME, PGSIZE, (uint64)(p->trapframe),
+  if (mappages(pagetable, p->trapframe_va, PGSIZE, (uint64)(p->trapframe),
                PTE_R | PTE_W) < 0) {
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
     uvmfree(pagetable, 0);
@@ -207,10 +330,10 @@ proc_pagetable(struct proc *p)
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
-proc_freepagetable(pagetable_t pagetable, uint64 sz)
+proc_freepagetable(pagetable_t pagetable, uint64 sz, uint64 trapframe_va)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, trapframe_va, 1, 0);
   uvmfree(pagetable, sz);
 }
 
@@ -233,23 +356,46 @@ userinit(void)
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
 int
-growproc(int n)
+growproc(int n, uint64 *oldsz)
 {
   uint64 sz;
   struct proc *p = myproc();
 
+  acquire(&thread_vm_lock);
   sz = p->sz;
+  *oldsz = sz;
   if (n > 0) {
-    if (sz + n > TRAPFRAME) {
+    if (sz + n > USER_TOP) {
+      release(&thread_vm_lock);
       return -1;
     }
     if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+      release(&thread_vm_lock);
       return -1;
     }
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+  release(&thread_vm_lock);
+  return 0;
+}
+
+// Update the shared address-space size for lazy sbrk under the same lock used
+// for page-table growth and thread trapframe publication.
+int
+growproc_lazy(int n, uint64 *oldsz)
+{
+  struct proc *p = myproc();
+
+  acquire(&thread_vm_lock);
+  *oldsz = p->sz;
+  if (n < 0 || p->sz + n < p->sz || p->sz + n > USER_TOP) {
+    release(&thread_vm_lock);
+    return -1;
+  }
+  p->sz += n;
+  release(&thread_vm_lock);
   return 0;
 }
 

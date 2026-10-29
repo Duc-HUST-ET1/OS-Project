@@ -12,9 +12,11 @@ uint ticks;
 extern char trampoline[], uservec[];
 
 // in kernelvec.S, calls kerneltrap().
-void kernelvec();
+void
+kernelvec();
 
-extern int devintr();
+extern int
+devintr();
 
 void
 trapinit(void)
@@ -117,6 +119,8 @@ prepare_return(void)
   p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
   p->trapframe->kernel_trap = (uint64)usertrap;
   p->trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
+  // The trampoline uses sscratch to find this context's distinct trapframe.
+  asm volatile("csrw sscratch, %0" : : "r"(p->trapframe_va));
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.

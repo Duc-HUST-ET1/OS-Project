@@ -6,7 +6,8 @@
 #include "user/user.h"
 
 char buf[1024];
-int match(char *, char *);
+int
+match(char *, char *);
 
 void
 grep(char *pattern, int fd)
@@ -66,8 +67,10 @@ main(int argc, char *argv[])
 // The Practice of Programming, Chapter 9, or
 // https://www.cs.princeton.edu/courses/archive/spr09/cos333/beautiful.html
 
-int matchhere(char *, char *);
-int matchstar(int, char *, char *);
+int
+matchhere(char *, char *);
+int
+matchstar(int, char *, char *);
 
 int
 match(char *re, char *text)
