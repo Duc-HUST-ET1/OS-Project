@@ -136,13 +136,13 @@ kexec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry; // initial program counter = ulib.c:start()
   p->trapframe->sp = sp;         // initial stack pointer
-  proc_freepagetable(oldpagetable, oldsz);
+  proc_freepagetable(oldpagetable, oldsz, p->trapframe_va);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
 bad:
   if (pagetable)
-    proc_freepagetable(pagetable, sz);
+    proc_freepagetable(pagetable, sz, p->trapframe_va);
   if (ip) {
     iunlockput(ip);
     end_op();

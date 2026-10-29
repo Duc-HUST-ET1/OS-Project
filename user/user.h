@@ -6,6 +6,8 @@ struct stat;
 int
 fork(void);
 int
+clone(void (*entry)(void), void *stack, void *tls);
+int
 exit(int) __attribute__((noreturn));
 int
 wait(int *);
