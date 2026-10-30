@@ -6,10 +6,7 @@
 #ifndef _ADDRSPACE_H_
 #define _ADDRSPACE_H_
 
-#include "types.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "memlayout.h"
+
 
 struct proc;
 

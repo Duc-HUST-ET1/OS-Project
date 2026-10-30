@@ -158,3 +158,9 @@ sys_procinfo(void)
 
   return 0;
 }
+uint64
+sys_join(void)
+{
+  // Tạm thời trả về 0 hoặc gọi logic join của nhóm
+  return 0;
+}
