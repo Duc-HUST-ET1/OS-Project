@@ -37,14 +37,22 @@ char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
 
-void balloc(int);
-void wsect(uint, void *);
-void winode(uint, struct dinode *);
-void rinode(uint inum, struct dinode *ip);
-void rsect(uint sec, void *buf);
-uint ialloc(ushort type);
-void iappend(uint inum, void *p, int n);
-void die(const char *);
+void
+balloc(int);
+void
+wsect(uint, void *);
+void
+winode(uint, struct dinode *);
+void
+rinode(uint inum, struct dinode *ip);
+void
+rsect(uint sec, void *buf);
+uint
+ialloc(ushort type);
+void
+iappend(uint inum, void *p, int n);
+void
+die(const char *);
 
 // convert to riscv byte order
 ushort

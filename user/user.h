@@ -8,8 +8,6 @@ int exit(int) __attribute__((noreturn));
 int wait(int *);
 int pipe(int *);
 int write(int, const void *, int);
-int hello(void);
-int procinfo(void);
 int read(int, void *, int);
 int close(int);
 int kill(int);
@@ -27,6 +25,8 @@ char *sys_sbrk(int, int);
 int pause(int);
 int uptime(void);
 int sync(void);
+int hello(void);
+int procinfo(void);
 int clone(void(*fcn)(void*), void *arg, void *stack);
 int join(void **stack);
 

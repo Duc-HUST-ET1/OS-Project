@@ -48,8 +48,10 @@ struct log {
 };
 struct log log;
 
-static void recover_from_log(void);
-static void commit();
+static void
+recover_from_log(void);
+static void
+commit();
 
 void
 initlog(int dev, struct superblock *sb)

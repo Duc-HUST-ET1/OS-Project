@@ -31,6 +31,17 @@ sys_fork(void)
 }
 
 uint64
+sys_clone(void)
+{
+  uint64 entry, stack, tls;
+
+  argaddr(0, &entry);
+  argaddr(1, &stack);
+  argaddr(2, &tls);
+  return kthread_create(entry, stack, tls);
+}
+
+uint64
 sys_wait(void)
 {
   uint64 p;
@@ -47,21 +58,16 @@ sys_sbrk(void)
 
   argint(0, &n);
   argint(1, &t);
-  addr = myproc()->sz;
-
   if (t == SBRK_EAGER || n < 0) {
-    if (growproc(n) < 0) {
+    if (growproc(n, &addr) < 0) {
       return -1;
     }
   } else {
     // Lazily allocate memory for this process: increase its memory
     // size but don't allocate memory. If the processes uses the
     // memory, vmfault() will allocate it.
-    if (addr + n < addr)
+    if (growproc_lazy(n, &addr) < 0)
       return -1;
-    if (addr + n > TRAPFRAME)
-      return -1;
-    myproc()->sz += n;
   }
   return addr;
 }

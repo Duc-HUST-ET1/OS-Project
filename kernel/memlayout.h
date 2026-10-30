@@ -58,6 +58,9 @@
 //   fixed-size stack
 //   expandable heap
 //   ...
-//   TRAPFRAME (p->trapframe, used by the trampoline)
+//   per-proc trapframe slots (used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
-#define TRAPFRAME (TRAMPOLINE - PGSIZE)
+#define TRAPFRAME_VA(slot) (TRAMPOLINE - ((uint64)(slot) + 1) * PGSIZE)
+#define USER_TOP (TRAMPOLINE - (NPROC + 1) * PGSIZE)
+// Slot zero is retained for existing code which needs a conservative bound.
+#define TRAPFRAME TRAPFRAME_VA(0)

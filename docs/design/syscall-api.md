@@ -7,12 +7,32 @@ This document is intentionally a proposal and must be clearly distinguished from
 The following syscalls are planned for the project and are not part of the stock xv6 ABI unless explicitly added during implementation.
 
 ```c
-int clone(uint64_t flags, void *stack, void *tls);
+int clone(void (*entry)(void), void *stack, void *tls);
 int join(int thread_id, void **retval);
-int thread_exit(int status);
+int thread_exit(uint64_t retval);
 ```
 
-The exact syscall numbers, argument ordering, and error semantics will be determined by the design review and the actual xv6 syscall table.
+`clone` receives the user entry point explicitly, `stack` is the 16-byte-aligned
+initial stack pointer that addresses the startup record, and `tls` initializes
+the child's `tp` register. The kernel core is exposed as `kthread_create(entry,
+stack, tls)`. B5 registers `clone` with syscall number 25 and adds the user
+prototype and assembly stub. `join` and `thread_exit` require the lifecycle
+operations from B4 before their handlers can be registered.
+
+## R2 ABI decisions from Member C feedback
+
+- A newly created child returns from the clone syscall with `a0 = 0`.
+- The user library supplies a stack whose top is 16-byte aligned. The proposed
+  startup record contains the start routine and its argument; a user
+  trampoline invokes the routine and passes its pointer result to thread exit.
+- Exit results and user addresses use RV64 `uint64` values end to end. `join`
+  copies exactly eight bytes to the caller's result pointer.
+- `join` returns the reaped TID on success and `-1` on failure.
+
+The explicit entry argument resolves the discrepancy between the fixed
+user-trampoline contract and the earlier `clone(flags, stack, tls)` summary.
+The user library passes `thread_trampoline` as `entry`; the kernel does not
+interpret function pointers or startup records.
 
 ## Arguments and return values
 

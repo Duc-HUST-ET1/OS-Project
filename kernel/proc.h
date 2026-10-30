@@ -88,16 +88,21 @@ struct proc {
   int killed;           // If non-zero, have been killed
   int xstate;           // Exit status to be returned to parent's wait
   int pid;              // Process ID
+  int tgid;             // Thread-group ID; leader's pid for a process group
+  int is_thread;        // Non-zero for a schedulable thread in a process group
+  uint64 xstate64;      // Full-width thread exit result (RV64 pointer-safe)
 
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
+  uint64 trapframe_va;         // This context's virtual trapframe slot
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
+  int owns_pagetable;          // False for threads sharing a group's page table
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
