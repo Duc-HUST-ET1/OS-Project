@@ -22,7 +22,6 @@ sub entry {
 }
 	
 entry("fork");
-entry("clone");
 entry("exit");
 entry("wait");
 entry("pipe");
