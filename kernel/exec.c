@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "elf.h"
+#include "addrspace.h"
 
 static int
 loadseg(pde_t *, uint64, struct inode *, uint, uint);
@@ -131,13 +132,18 @@ kexec(char *path, char **argv)
   safestrcpy(p->name, last, sizeof(p->name));
 
   // Commit to the user image.
-  oldpagetable = p->pagetable;
-  p->pagetable = pagetable;
-  p->sz = sz;
+ // Commit to the user image via a fresh shared address-space descriptor.
+  struct addrspace *new_as = as_alloc();
+  if (new_as == 0)
+    goto bad;
+  new_as->pagetable = pagetable;
+  new_as->sz = sz;
+
+  as_replace_on_exec(p, new_as);
   p->trapframe->epc = elf.entry; // initial program counter = ulib.c:start()
   p->trapframe->sp = sp;         // initial stack pointer
-  proc_freepagetable(oldpagetable, oldsz, p->trapframe_va);
-
+  (void)oldpagetable;
+  (void)oldsz;
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
 bad:

@@ -79,6 +79,10 @@ struct trapframe {
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
+struct addrspace;
+struct addrspace; // Khai báo sớm để dùng được con trỏ *as bên dưới
+
+// Per-process state
 struct proc {
   struct spinlock lock;
 
@@ -98,6 +102,12 @@ struct proc {
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 trapframe_va;         // This context's virtual trapframe slot
+  
+  // === 2 TRƯỜNG THÊM VÀO CHO TÍNH NĂNG ADDRSPACE (TUẦN 2) ===
+  struct addrspace *as;        // Con trỏ tới không gian địa chỉ dùng chung
+  int tf_slot;                 // Chỉ số slot trapframe (0..15)
+  // ==========================================================
+
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S

@@ -131,6 +131,8 @@ extern uint64
 sys_procinfo(void);
 extern uint64
 sys_clone(void);
+extern uint64 
+sys_join(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -158,6 +160,7 @@ static uint64 (*syscalls[])(void) = {
   [SYS_mkdir]   = sys_mkdir,
   [SYS_close]   = sys_close,
   [SYS_sync]    = sys_sync,
+  [SYS_join]    = sys_join,
   [SYS_hello] sys_hello,
   [SYS_procinfo] sys_procinfo,
   [SYS_clone]   sys_clone,
