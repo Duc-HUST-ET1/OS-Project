@@ -17,7 +17,16 @@ Tests are intentionally separated into two categories:
 1. guest tests that run inside xv6 user space
 2. host-side scripts that orchestrate build and qemu execution
 
-The exact guest tests are not yet implemented in this initialization phase; the structure is in place so they can be added without disrupting the upstream tree.
+Guest coverage is being added incrementally with the lifecycle implementation.
+
+## Member B clone smoke check
+
+The `clonecheck` guest program exercises the currently registered `clone`
+syscall and scheduler path. After booting xv6 with `make qemu`, run `clonecheck`
+at the xv6 prompt. A pass prints a child-ran line, the TID returned to the
+parent, and `clonecheck: PASS (thread scheduled and reaped)`. It uses `exit`
+and `wait` for cleanup; it does not verify the later `thread_exit`/`join`
+semantics or group-wide exit policy.
 
 ## Requirement checklist
 
