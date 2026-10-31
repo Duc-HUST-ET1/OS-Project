@@ -33,12 +33,14 @@ sys_fork(void)
 uint64
 sys_clone(void)
 {
-  uint64 entry, stack, tls;
+  uint64 entry, arg, stack;
 
-  argaddr(0, &entry);
-  argaddr(1, &stack);
-  argaddr(2, &tls);
-  return kthread_create(entry, stack, tls);
+  argaddr(0, &entry); // a0: hàm thread_trampoline
+  argaddr(1, &arg);   // a1: con trỏ đối số targs
+  argaddr(2, &stack); // a2: con trỏ ngăn xếp sp
+
+  // Truyền đúng stack vào vị trí thứ 2, và arg vào vị trí thứ 3 của kthread_create
+  return kthread_create(entry, stack, arg);
 }
 
 uint64
@@ -161,6 +163,8 @@ sys_procinfo(void)
 uint64
 sys_join(void)
 {
-  // Tạm thời trả về 0 hoặc gọi logic join của nhóm
-  return 0;
+  uint64 stack_out;
+
+  argaddr(0, &stack_out);
+  return kthread_join(stack_out);
 }

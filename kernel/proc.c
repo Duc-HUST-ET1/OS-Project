@@ -168,12 +168,12 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
     return -1;
   }
 
-  np->is_thread = 1;
+ np->is_thread = 1;
   np->tgid = parent->tgid;
   np->trapframe->epc = entry;
   np->trapframe->sp = stack;
   np->trapframe->tp = tls;
-  np->trapframe->a0 = 0;
+  np->trapframe->a0 = tls; 
   safestrcpy(np->name, parent->name, sizeof(np->name));
   tid = np->pid;
 
@@ -189,6 +189,51 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
   release(&np->lock);
   release(&wait_lock);
   return tid;
+}
+
+int
+kthread_join(uint64 stack_out_va)
+{
+  struct proc *np;
+  int havekids, pid;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+
+  for (;;) {
+    havekids = 0;
+    for (np = proc; np < &proc[NPROC]; np++) {
+      if (np->parent == p && np->is_thread) {
+        acquire(&np->lock);
+        havekids = 1;
+        if (np->state == ZOMBIE) {
+          pid = np->pid;
+          uint64 sp = np->trapframe->sp;
+          if (stack_out_va != 0 &&
+              copyout(p->pagetable, p->sz, stack_out_va, (char *)&sp, sizeof(sp)) < 0) {
+            release(&np->lock);
+            release(&wait_lock);
+            return -1;
+          }
+          freeproc(np);
+          release(&np->lock);
+          release(&wait_lock);
+          return pid;
+        }
+        release(&np->lock);
+      }
+    }
+
+    if (!havekids || killed(p)) {
+      release(&wait_lock);
+      return -1;
+    }
+
+    sleep_prepare(p);
+    release(&wait_lock);
+    sleep();
+    acquire(&wait_lock);
+  }
 }
 
 int
