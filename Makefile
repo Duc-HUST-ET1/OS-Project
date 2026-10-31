@@ -152,6 +152,7 @@ UPROGS=\
 	$U/_sync\
 	$U/_hello\
 	$U/_procinfo\
+	$U/_clonecheck\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
