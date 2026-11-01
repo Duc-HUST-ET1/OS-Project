@@ -55,6 +55,13 @@ pending. Group-wide exit, concurrent `exec`, process-wide kill, and shared
 page-table final-release policy remain B4/B6 integration risks and must be
 completed before relying on full thread-group lifecycle semantics.
 
+For direct evidence, `make fs.img` builds the guest `clonecheck` program and
+includes it in the xv6 image. In QEMU (`make qemu CPUS=1`), running `clonecheck`
+printed the parent TID, confirmed the child ran, and reported
+`clonecheck: PASS (thread scheduled and reaped)`. This verifies the registered
+clone path through scheduler publication and `wait` reclamation, but does not
+claim join/thread-exit or full group-lifecycle coverage.
+
 ## Risks
 
 - group-wide exit and final page-table release are not implemented in B1–B3
