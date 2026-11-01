@@ -134,6 +134,7 @@ sys_clone(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
+extern uint64 sys_join(void);
 static uint64 (*syscalls[])(void) = {
   // clang-format off
   [SYS_fork]    = sys_fork,
@@ -161,6 +162,7 @@ static uint64 (*syscalls[])(void) = {
   [SYS_hello] sys_hello,
   [SYS_procinfo] sys_procinfo,
   [SYS_clone]   sys_clone,
+  [SYS_join]     sys_join,
   // clang-format on
 };
 

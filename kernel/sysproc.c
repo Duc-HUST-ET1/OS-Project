@@ -158,3 +158,12 @@ sys_procinfo(void)
 
   return 0;
 }
+
+
+uint64
+sys_join(void)
+{
+  uint64 p;
+  argaddr(0, &p);
+  return kwait(p);
+}
