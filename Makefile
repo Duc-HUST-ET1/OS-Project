@@ -28,6 +28,7 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
+  $K/addrspace.o \
   $K/virtio_disk.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
@@ -101,7 +102,7 @@ $K/%.o: $K/%.S
 tags: $(OBJS)
 	etags kernel/*.S kernel/*.c
 
-ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
+ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o $U/thread.o
 
 _%: %.o $(ULIB) $U/user.ld
 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
@@ -152,7 +153,10 @@ UPROGS=\
 	$U/_sync\
 	$U/_hello\
 	$U/_procinfo\
+	$U/_threadtest\
 	$U/_clonecheck\
+	$U/_parallel_sum\
+	$U/_leaktest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

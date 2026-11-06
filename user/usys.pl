@@ -22,7 +22,6 @@ sub entry {
 }
 	
 entry("fork");
-entry("clone");
 entry("exit");
 entry("wait");
 entry("pipe");
@@ -46,3 +45,5 @@ entry("uptime");
 entry("sync");
 entry("hello");
 entry("procinfo");
+entry("clone");
+entry("join");

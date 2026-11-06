@@ -3,7 +3,7 @@
 #include "user.h"
 
 static void
-clonecheck_worker(void)
+clonecheck_worker(void *arg)
 {
   printf("clonecheck: child ran\n");
   exit(0);
