@@ -427,7 +427,8 @@ growproc_lazy(int n, uint64 *oldsz)
   uint64 newsz;
   if (n > 0) {
     newsz = sz + (uint64)n;
-    if (newsz < sz || newsz > USER_TOP || newsz >= TRAPFRAME_LOWEST_VA) {
+    // Cho phép chạm mốc TRAPFRAME, nhưng vượt quá TRAPFRAME (như sbrklazy(1)) thì báo lỗi -1
+    if (newsz < sz || newsz > TRAPFRAME) {
       release(&p->as->lock);
       return -1;
     }
@@ -436,7 +437,7 @@ growproc_lazy(int n, uint64 *oldsz)
       release(&p->as->lock);
       return -1;
     }
-    newsz = sz - (uint64)(-n);
+    newsz = uvmdealloc(p->as->pagetable, sz, sz - (uint64)(-n));
   } else {
     newsz = sz;
   }
