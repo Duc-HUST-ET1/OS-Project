@@ -7,6 +7,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
+#include "addrspace.h"
 
 /*
  * the kernel's page table.
@@ -460,8 +461,10 @@ vmfault(pagetable_t pagetable, uint64 psz, uint64 va, int read)
 {
   uint64 mem;
 
-  if (va >= psz)
+  // Chặn không cho cấp phát trang vật lý đè lên vùng 16 khe Trapframe trở lên
+  if (va >= psz || va >= TRAPFRAME)
     return 0;
+    
   va = PGROUNDDOWN(va);
   if (ismapped(pagetable, va)) {
     return 0;

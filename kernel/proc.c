@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "addrspace.h"
 
 struct cpu cpus[NCPU];
 
@@ -29,7 +30,7 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
-static struct spinlock thread_vm_lock;
+
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -56,7 +57,6 @@ procinit(void)
 
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
-  initlock(&thread_vm_lock, "thread_vm");
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -104,9 +104,11 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
 {
   struct proc *parent = myproc();
   struct proc *np;
-  pagetable_t empty_pt;
   pte_t *pte;
   int fd, tid;
+
+  if (parent->as == 0)
+    return -1;
 
   if ((stack & 15) != 0 || parent->sz < 2 * sizeof(uint64) ||
       stack > parent->sz - 2 * sizeof(uint64) || entry >= parent->sz)
@@ -123,71 +125,63 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
   if ((np = allocproc()) == 0)
     return -1;
 
-  // Drop the empty private page table allocated by allocproc before attaching
-  // the child to the parent's address space.
-  empty_pt = np->pagetable;
-  np->pagetable = 0;
+  // Drop the private address space allocated by allocproc before attaching
+  // the child thread to the parent's shared address space.
+  as_release(np);
   release(&np->lock);
-  proc_freepagetable(empty_pt, 0, np->trapframe_va);
 
-  acquire(&thread_vm_lock);
-  // Revalidate while page-table changes are serialized with sbrk/growproc.
-  if ((stack & 15) != 0 || parent->sz < 2 * sizeof(uint64) ||
-      stack > parent->sz - 2 * sizeof(uint64) || entry >= parent->sz) {
-    release(&thread_vm_lock);
+  acquire(&parent->as->lock);
+  // Revalidate while page-table changes are serialized under parent->as->lock
+  if ((stack & 15) != 0 || parent->as->sz < 2 * sizeof(uint64) ||
+      stack > parent->as->sz - 2 * sizeof(uint64) || entry >= parent->as->sz) {
+    release(&parent->as->lock);
     acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
   }
-  pte = walk(parent->pagetable, entry, 0);
+  pte = walk(parent->as->pagetable, entry, 0);
   if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_X)) !=
                       (PTE_V | PTE_U | PTE_X)) {
-    release(&thread_vm_lock);
+    release(&parent->as->lock);
     acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
   }
-  pte = walk(parent->pagetable, stack, 0);
+  pte = walk(parent->as->pagetable, stack, 0);
   if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_W)) !=
                       (PTE_V | PTE_U | PTE_W)) {
-    release(&thread_vm_lock);
+    release(&parent->as->lock);
     acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
   }
-  if (mappages(parent->pagetable, np->trapframe_va, PGSIZE,
-               (uint64)np->trapframe, PTE_R | PTE_W) < 0) {
-    release(&thread_vm_lock);
+  release(&parent->as->lock);
+
+  // Retain shared address space and map private trapframe slot [1..15]
+  if (as_retain_for_clone(parent->as, np) < 0) {
     acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
   }
 
-  np->pagetable = parent->pagetable;
-  np->sz = parent->sz;
-  np->owns_pagetable = 0;
-  np->is_thread = 1;
+ np->is_thread = 1;
   np->tgid = parent->tgid;
   np->trapframe->epc = entry;
   np->trapframe->sp = stack;
   np->trapframe->tp = tls;
-  np->trapframe->a0 = 0;
-  asm volatile("sfence.vma zero, zero");
+  np->trapframe->a0 = tls; 
   safestrcpy(np->name, parent->name, sizeof(np->name));
   tid = np->pid;
-  release(&thread_vm_lock);
 
   for (fd = 0; fd < NOFILE; fd++)
     if (parent->ofile[fd])
       np->ofile[fd] = filedup(parent->ofile[fd]);
   np->cwd = idup(parent->cwd);
 
-  // Parent/child relationships are published under wait_lock, and the proc
-  // lock protects the final transition to scheduler-visible state.
   acquire(&wait_lock);
   acquire(&np->lock);
   np->parent = parent;
@@ -197,119 +191,49 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
   return tid;
 }
 
-// Exit one schedulable thread and preserve its full-width result until join.
-void
-kthread_exit(uint64 retval)
-{
-  struct proc *p = myproc();
-  struct proc *leader;
-
-  if (!p->is_thread)
-    kexit((int)retval);
-
-  for (int fd = 0; fd < NOFILE; fd++) {
-    if (p->ofile[fd]) {
-      fileclose(p->ofile[fd]);
-      p->ofile[fd] = 0;
-    }
-  }
-  begin_op();
-  iput(p->cwd);
-  end_op();
-  p->cwd = 0;
-
-  acquire(&wait_lock);
-  wakeup(p->parent);
-  acquire(&p->lock);
-  p->xstate64 = retval;
-  p->xstate = (int)retval;
-  p->state = ZOMBIE;
-  leader = 0;
-  for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
-    if (tp->pid == p->tgid && !tp->is_thread && tp->state != UNUSED) {
-      leader = tp;
-      break;
-    }
-  }
-  // Wake a process-wide exit waiting for all members, even if this thread
-  // was created by a sibling rather than by the leader.
-  if (leader) {
-    release(&p->lock);
-    wakeup(leader);
-    acquire(&p->lock);
-  }
-  release(&wait_lock);
-  sched();
-  panic("thread zombie exit");
-}
-
-// Join exactly one thread in the caller's thread group. The retval is copied
-// before the zombie and its trapframe slot are reclaimed.
 int
-kthread_join(int tid, uint64 retval_addr)
+kthread_join(uint64 stack_out_va)
 {
+  struct proc *np;
+  int havekids, pid;
   struct proc *p = myproc();
-  struct proc *tp;
-  int found;
-  uint64 retval;
 
-  if (tid <= 0)
-    return -1;
   acquire(&wait_lock);
+
   for (;;) {
-    found = 0;
-    for (tp = proc; tp < &proc[NPROC]; tp++) {
-      if (tp == p || tp->pid != tid || !tp->is_thread || tp->tgid != p->tgid)
-        continue;
-      acquire(&tp->lock);
-      found = 1;
-      if (tp->state == ZOMBIE) {
-        retval = tp->xstate64;
-        if (retval_addr && copyout(p->pagetable, p->sz, retval_addr,
-                                   (char *)&retval, sizeof(retval)) < 0) {
-          release(&tp->lock);
+    havekids = 0;
+    for (np = proc; np < &proc[NPROC]; np++) {
+      if (np->parent == p && np->is_thread) {
+        acquire(&np->lock);
+        havekids = 1;
+        if (np->state == ZOMBIE) {
+          pid = np->pid;
+          uint64 sp = np->trapframe->sp;
+          if (stack_out_va != 0 &&
+              copyout(p->pagetable, p->sz, stack_out_va, (char *)&sp, sizeof(sp)) < 0) {
+            release(&np->lock);
+            release(&wait_lock);
+            return -1;
+          }
+          freeproc(np);
+          release(&np->lock);
           release(&wait_lock);
-          return -1;
+          return pid;
         }
-        tp->parent = 0;
-        freeproc(tp);
-        release(&tp->lock);
-        release(&wait_lock);
-        return tid;
+        release(&np->lock);
       }
-      release(&tp->lock);
-      break;
     }
-    if (!found || killed(p)) {
+
+    if (!havekids || killed(p)) {
       release(&wait_lock);
       return -1;
     }
+
     sleep_prepare(p);
     release(&wait_lock);
     sleep();
     acquire(&wait_lock);
   }
-}
-
-// exec replaces the one address space shared by a thread group. Require all
-// sibling slots to have been joined before allowing that replacement.
-int
-kthread_group_has_siblings(struct proc *p)
-{
-  struct proc *tp;
-  int busy = 0;
-
-  for (tp = proc; tp < &proc[NPROC]; tp++) {
-    if (tp == p)
-      continue;
-    acquire(&tp->lock);
-    if (tp->state != UNUSED && tp->tgid == p->tgid)
-      busy = 1;
-    release(&tp->lock);
-    if (busy)
-      break;
-  }
-  return busy;
 }
 
 int
@@ -350,7 +274,8 @@ found:
   p->is_thread = 0;
   p->xstate64 = 0;
   p->owns_pagetable = 1;
-  p->trapframe_va = TRAPFRAME_VA(p - proc);
+  p->tf_slot = 0;
+  p->trapframe_va = THREAD_TRAPFRAME(0);
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -360,13 +285,21 @@ found:
     return 0;
   }
 
-  // An empty user page table.
+  // Allocate a shared address-space descriptor.
+  if ((p->as = as_alloc()) == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // An empty user page table with TRAMPOLINE and slot-0 TRAPFRAME mapped.
   p->pagetable = proc_pagetable(p);
   if (p->pagetable == 0) {
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+  p->as->pagetable = p->pagetable;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -377,18 +310,13 @@ found:
   return p;
 }
 
-// free a proc structure and the data hanging from it,
-// including user pages.
-// p->lock must be held.
 static void
 freeproc(struct proc *p)
 {
-  if (p->pagetable && p->owns_pagetable)
+  if (p->as) {
+    as_release(p);
+  } else if (p->pagetable && p->owns_pagetable) {
     proc_freepagetable(p->pagetable, p->sz, p->trapframe_va);
-  else if (p->pagetable && p->is_thread) {
-    acquire(&thread_vm_lock);
-    uvmunmap(p->pagetable, p->trapframe_va, 1, 0);
-    release(&thread_vm_lock);
   }
   p->pagetable = 0;
   p->owns_pagetable = 0;
@@ -404,6 +332,7 @@ freeproc(struct proc *p)
   p->xstate64 = 0;
   p->tgid = 0;
   p->is_thread = 0;
+  p->tf_slot = 0;
   p->trapframe_va = 0;
   p->state = UNUSED;
 }
@@ -473,54 +402,61 @@ userinit(void)
 int
 growproc(int n, uint64 *oldsz)
 {
-  uint64 sz;
   struct proc *p = myproc();
+  if (p->as == 0)
+    return -1;
 
-  acquire(&thread_vm_lock);
-  sz = p->sz;
-  *oldsz = sz;
-  if (n > 0) {
-    if (sz + n > USER_TOP) {
-      release(&thread_vm_lock);
-      return -1;
-    }
-    if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
-      release(&thread_vm_lock);
-      return -1;
-    }
-  } else if (n < 0) {
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
-  }
-  p->sz = sz;
-  release(&thread_vm_lock);
-  return 0;
+  acquire(&p->as->lock);
+  *oldsz = p->as->sz;
+  release(&p->as->lock);
+
+  return as_grow(p->as, n);
 }
 
-// Update the shared address-space size for lazy sbrk under the same lock used
-// for page-table growth and thread trapframe publication.
 int
 growproc_lazy(int n, uint64 *oldsz)
 {
   struct proc *p = myproc();
-
-  acquire(&thread_vm_lock);
-  *oldsz = p->sz;
-  if (n < 0 || p->sz + n < p->sz || p->sz + n > USER_TOP) {
-    release(&thread_vm_lock);
+  if (p->as == 0)
     return -1;
+
+  acquire(&p->as->lock);
+  uint64 sz = p->as->sz;
+  *oldsz = sz;
+
+  uint64 newsz;
+  if (n > 0) {
+    newsz = sz + (uint64)n;
+    // Cho phép chạm mốc TRAPFRAME, nhưng vượt quá TRAPFRAME (như sbrklazy(1)) thì báo lỗi -1
+    if (newsz < sz || newsz > TRAPFRAME) {
+      release(&p->as->lock);
+      return -1;
+    }
+  } else if (n < 0) {
+    if ((uint64)(-n) > sz) {
+      release(&p->as->lock);
+      return -1;
+    }
+    newsz = uvmdealloc(p->as->pagetable, sz, sz - (uint64)(-n));
+  } else {
+    newsz = sz;
   }
-  p->sz += n;
-  release(&thread_vm_lock);
+
+  p->as->sz = newsz;
+  for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
+    if (tp->as == p->as && tp->state != UNUSED) {
+      tp->sz = newsz;
+    }
+  }
+  release(&p->as->lock);
   return 0;
 }
 
-// Create a new process, copying the parent.
-// Sets up child kernel stack to return as if from fork() system call.
 int
 kfork(void)
 {
   int i, pid;
-  struct proc *np, *owner;
+  struct proc *np;
   struct proc *p = myproc();
 
   // Allocate process.
@@ -528,16 +464,12 @@ kfork(void)
     return -1;
   }
 
-  // Copy user memory from parent to child.
-  acquire(&thread_vm_lock);
-  if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
-    release(&thread_vm_lock);
+  // Copy user memory from parent's shared address space to child.
+  if (as_copy_for_fork(p->as, np) < 0) {
     freeproc(np);
     release(&np->lock);
     return -1;
   }
-  np->sz = p->sz;
-  release(&thread_vm_lock);
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -558,17 +490,7 @@ kfork(void)
   release(&np->lock);
 
   acquire(&wait_lock);
-  owner = p;
-  if (p->is_thread) {
-    for (owner = proc; owner < &proc[NPROC]; owner++) {
-      if (owner->tgid == p->tgid && !owner->is_thread &&
-          owner->state != UNUSED)
-        break;
-    }
-    if (owner == &proc[NPROC])
-      owner = p;
-  }
-  np->parent = owner;
+  np->parent = p;
   release(&wait_lock);
 
   acquire(&np->lock);
@@ -620,45 +542,6 @@ kexit(int status)
 
   acquire(&wait_lock);
 
-  // A process leader cannot let wait() release the shared address space while
-  // sibling contexts are still running. Kill and reclaim them first.
-  if (!p->is_thread) {
-    int active;
-    do {
-      active = 0;
-      for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
-        if (tp == p)
-          continue;
-        acquire(&tp->lock);
-        if (tp->tgid == p->tgid && tp->is_thread &&
-            tp->state != UNUSED && tp->state != ZOMBIE) {
-          tp->killed = 1;
-          if (tp->state == SLEEPING)
-            tp->state = RUNNABLE;
-          active = 1;
-        }
-        release(&tp->lock);
-      }
-      if (active) {
-        sleep_prepare(p);
-        release(&wait_lock);
-        sleep();
-        acquire(&wait_lock);
-      }
-    } while (active);
-
-    for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
-      if (tp == p)
-        continue;
-      acquire(&tp->lock);
-      if (tp->tgid == p->tgid && tp->is_thread && tp->state == ZOMBIE) {
-        tp->parent = 0;
-        freeproc(tp);
-      }
-      release(&tp->lock);
-    }
-  }
-
   // Give any children to init.
   reparent(p);
 
@@ -686,17 +569,13 @@ kwait(uint64 addr)
   int havekids, pid;
   struct proc *p = myproc();
 
-  // Child processes belong to the group leader; threads use join(tid, ...).
-  if (p->is_thread)
-    return -1;
-
   acquire(&wait_lock);
 
   for (;;) {
     // Scan through table looking for exited children.
     havekids = 0;
     for (pp = proc; pp < &proc[NPROC]; pp++) {
-      if (pp->parent == p && !pp->is_thread) {
+      if (pp->parent == p) {
         // make sure the child isn't still in exit() or swtch().
         acquire(&pp->lock);
 
@@ -917,38 +796,25 @@ wakeup(void *chan)
 int
 kkill(int pid)
 {
-  struct proc *p, *target = 0;
-  int tgid = -1;
+  struct proc *p;
 
   if (pid == 0)
     return -1;
 
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
-    if (p->pid == pid && p->state != UNUSED) {
-      tgid = p->tgid;
-      release(&p->lock);
-      break;
-    }
-    release(&p->lock);
-  }
-  if (tgid < 0)
-    return -1;
-  for (p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if (p->tgid == tgid && p->state != UNUSED) {
+    if (p->pid == pid) {
       p->killed = 1;
       if (p->state == SLEEPING) {
         // Wake process from sleep().
         p->state = RUNNABLE;
       }
       release(&p->lock);
-      target = p;
-      continue;
+      return 0;
     }
     release(&p->lock);
   }
-  return target ? 0 : -1;
+  return -1;
 }
 
 void
@@ -1031,4 +897,3 @@ procdump(void)
     printk("\n");
   }
 }
-
