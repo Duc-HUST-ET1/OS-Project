@@ -27,7 +27,7 @@ int uptime(void);
 int sync(void);
 int hello(void);
 int procinfo(void);
-int clone(void(*fcn)(void*), void *arg, void *stack);
+int clone(void (*fcn)(void), void *stack, void *tls);
 int join(void **stack);
 
 // ulib.c
