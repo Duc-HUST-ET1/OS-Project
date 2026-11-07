@@ -3,7 +3,7 @@
 #include "user.h"
 
 static void
-clonecheck_worker(void)
+clonecheck_worker(void *arg)
 {
   printf("clonecheck: PASS child was scheduled and executed\n");
   thread_exit(0x123456789abcdef0UL);

@@ -157,6 +157,8 @@ as_release(struct proc *p)
     if (pt) {
       // Unmap shared TRAMPOLINE and free all user physical pages [0 .. sz)
       uvmunmap(pt, TRAMPOLINE, 1, 0);
+      if (sz > TRAPFRAME)
+        sz = TRAPFRAME;
       uvmfree(pt, sz);
     }
   }
@@ -181,7 +183,8 @@ as_grow(struct addrspace *as, int n)
 
   if (n > 0) {
     uint64 newsz = sz + (uint64)n;
-    if (newsz < sz || newsz > USER_TOP || newsz >= TRAPFRAME_LOWEST_VA) {
+    // Cho phép newsz chạm đúng mốc TRAPFRAME (trang cuối cùng là TRAPFRAME - PGSIZE)
+    if (newsz < sz || newsz > TRAPFRAME) {
       release(&as->lock);
       return -1;
     }
@@ -199,7 +202,6 @@ as_grow(struct addrspace *as, int n)
   release(&as->lock);
   return 0;
 }
-
 // Thread-safe address-space deep copy for fork()
 int
 as_copy_for_fork(struct addrspace *src_as, struct proc *child_p)

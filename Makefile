@@ -145,8 +145,9 @@ UPROGS=\
 	$U/_threadtest\
 	$U/_parallel_sum\
 	$U/_threadtest\
-	$U/_parallel_sum\
 	$U/_clonecheck\
+	$U/_parallel_sum\
+	$U/_leaktest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
