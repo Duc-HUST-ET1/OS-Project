@@ -57,13 +57,63 @@ completed before relying on full thread-group lifecycle semantics.
 
 For direct evidence, `make fs.img` builds the guest `clonecheck` program and
 includes it in the xv6 image. In QEMU (`make qemu CPUS=1`), running `clonecheck`
-printed the parent TID, confirmed the child ran, and reported
-`clonecheck: PASS (thread scheduled and reaped)`. This verifies the registered
-clone path through scheduler publication and `wait` reclamation, but does not
-claim join/thread-exit or full group-lifecycle coverage.
+prints a PASS line for each checked behavior and finishes with
+`clonecheck: SUMMARY PASS (6/6 checks)`. The checks are thread creation,
+scheduling/execution, rejection of a wrong TID without modifying the output,
+exact-TID join/reap, preservation of a 64-bit retval, and rejection of a
+second join after reap.
 
 ## Risks
 
 - group-wide exit and final page-table release are not implemented in B1–B3
 - concurrent file-table changes and `exec` need group-level integration
 - inadequate cross-review of kernel lifecycle code
+
+## Task 2 progress (Member B; R3/R4 preparation)
+
+- Added `thread_exit(uint64 retval)` and `join(tid, uint64 *retval)` syscalls.
+  A thread records its full 64-bit result when it becomes a zombie. `join`
+  accepts only the exact TID in the caller's thread group, copies the result
+  out before reaping, and releases that thread's trapframe mapping.
+- Updated the `clonecheck` guest program to verify a nontrivial 64-bit return
+  value (`0x123456789abcdef0`), reject a wrong TID, and reject a second reap.
+  Build and QEMU output:
+  `clonecheck: SUMMARY PASS (6/6 checks)` with each passed behavior printed
+  separately.
+- `fork` now serializes the address-space copy with shared-page-table growth.
+  A process child is assigned to the thread-group leader so the leader can
+  reap it with `wait`.
+- `wait` ignores thread contexts; those are reaped by `join`. `kill(pid)`
+  treats the PID as a process-group target and marks every context with that
+  `tgid` as killed. Killed worker threads take the thread-exit path.
+- `exec` returns `-1` while any sibling context remains allocated. The caller
+  must join siblings first, avoiding replacement of a page table still used
+  by another thread.
+
+### Policy decisions and rationale
+
+- **Join is TID-specific and group-scoped.** A caller cannot reap another
+  process's thread or accidentally consume a different worker's result. The
+  result uses `uint64` end to end to preserve pointers and other RV64 values.
+- **`wait` is for child processes; `join` is for threads.** This keeps the
+  legacy `wait(int *)` exit-status contract intact while giving threads a
+  separate full-width result contract.
+- **`kill(pid)` is process-wide.** A process cannot safely continue with only
+  an arbitrary subset of its threads after external termination. The supplied
+  PID identifies the group through `tgid`.
+- **`fork` creates a single-threaded child from the calling context's memory
+  image.** The copied register state belongs to the caller, and the new child
+  starts its own group; serializing the copy prevents overlap with `sbrk`.
+- **`exec` requires siblings to be joined first.** Rejecting it is a small,
+  explicit policy that avoids invalidating a shared page table underneath
+  running threads.
+
+When a process leader exits, it now kills and reaps its remaining worker
+contexts before becoming a waitable zombie, so the shared page table stays
+valid. A worker that invokes the legacy process `exit()` syscall itself is
+still outside the supported user-thread contract; user workers must use
+`thread_exit`. Atomic exclusion between a concurrent `clone` and `exec` also
+needs a group lifecycle lock/API. The current `exec` sibling scan enforces the
+policy in the ordinary serialized path, but is not a complete concurrency
+barrier. The QEMU check covers thread return and reap; it does not claim
+coverage of group-wide races or the kill/wait/fork/exec matrix.

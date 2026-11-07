@@ -7,6 +7,10 @@ int
 fork(void);
 int
 clone(void (*entry)(void), void *stack, void *tls);
+void
+thread_exit(uint64) __attribute__((noreturn));
+int
+join(int, uint64 *);
 int
 exit(int) __attribute__((noreturn));
 int
