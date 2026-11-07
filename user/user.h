@@ -29,6 +29,7 @@ int hello(void);
 int procinfo(void);
 int clone(void (*fcn)(void), void *stack, void *tls);
 int join(int, uint64 *);
+void thread_exit(uint64) __attribute__((noreturn));
 
 // ulib.c
 int stat(const char *, struct stat *);

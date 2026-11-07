@@ -41,7 +41,7 @@ mutex_unlock(struct mutex *m)
 static void
 thread_trampoline(void)
 {
-  // Đọc con trỏ tham số trực tiếp từ thanh ghi tp
+  // Đọc con trỏ tham số trực tiếp từ thanh ghi tp do kernel gán
   register void *tp_reg asm("tp");
   struct trampoline_args *targs = (struct trampoline_args *)tp_reg;
 
@@ -50,7 +50,8 @@ thread_trampoline(void)
 
   void *ret = routine(real_arg);
 
-  thread_exit(ret);
+  // Gọi trực tiếp syscall thread_exit của Kernel
+  thread_exit((uint64)ret);
 }
 
 int
@@ -60,7 +61,7 @@ thread_create(void *(*start_routine)(void *), void *arg)
   if (stack_bottom == 0)
     return -1;
 
-  // Tính đỉnh stack căn chỉnh 16 bytes (lấy stack + 2048 để luôn nằm trong vùng an toàn)
+  // Tính đỉnh stack căn chỉnh 16 bytes
   uint64 sp = ((uint64)stack_bottom + 2048) & ~((uint64)15);
 
   sp -= sizeof(struct trampoline_args);
@@ -86,12 +87,6 @@ thread_create(void *(*start_routine)(void *), void *arg)
   mutex_unlock(&table_lock);
 
   return tid;
-}
-
-void
-thread_exit(void *retval)
-{
-  exit((int)(uint64)retval);
 }
 
 int

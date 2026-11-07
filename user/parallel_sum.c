@@ -5,6 +5,7 @@
 
 #define ARRAY_SIZE 100000
 #define NUM_WORKERS 8
+#define COMPUTE_LOAD 500
 
 static int array[ARRAY_SIZE];
 static long long global_sum = 0;
@@ -16,7 +17,15 @@ struct slice {
   long long partial_sum;
 };
 
-// Worker tính tổng một phần mảng độc lập
+// Hàm tính toán giả lập khối lượng công việc tính toán nặng
+long long heavy_calc(int val) {
+  long long res = val;
+  for (int i = 0; i < COMPUTE_LOAD; i++) {
+    res = (res * 3 + 1) % 1000000007;
+  }
+  return res;
+}
+
 void*
 sum_worker(void *arg)
 {
@@ -24,11 +33,10 @@ sum_worker(void *arg)
   long long local_sum = 0;
 
   for (int i = s->start; i < s->end; i++) {
-    local_sum += array[i];
+    local_sum += heavy_calc(array[i]);
   }
   s->partial_sum = local_sum;
 
-  // Thu gom kết quả vào biến tổng toàn cục qua Mutex
   mutex_lock(&sum_lock);
   global_sum += local_sum;
   mutex_unlock(&sum_lock);
@@ -40,29 +48,24 @@ int
 main(int argc, char *argv[])
 {
   printf("=== BENCHMARK: PARALLEL SUM (8 THREADS) ===\n");
-  printf("Sinh viên thực hiện: Do Phuong Diep - MSSV: 20233315\n\n");
+  printf("Sinh vien thuc hien: Do Phuong Diep - MSSV: 20233315\n\n");
 
-  // Khởi tạo mảng: phần tử thứ i có giá trị là 1 -> tổng kỳ vọng là ARRAY_SIZE
   for (int i = 0; i < ARRAY_SIZE; i++) {
     array[i] = 1;
   }
 
-  // ---------------------------------------------------------
-  // 1. Chạy ĐƠN LUỒNG (Baseline)
-  // ---------------------------------------------------------
+  // 1. Chay don luong (Single Thread)
   uint start_tick = uptime();
   long long single_sum = 0;
   for (int i = 0; i < ARRAY_SIZE; i++) {
-    single_sum += array[i];
+    single_sum += heavy_calc(array[i]);
   }
   uint single_time = uptime() - start_tick;
-  printf("1. Đơn luồng (Single Thread):\n");
-  printf("   - Tổng tính được = %lld\n", single_sum);
-  printf("   - Thời gian thực thi = %d ticks\n\n", single_time);
+  printf("1. Don luong (Single Thread):\n");
+  printf("   - Tong tinh duoc = %lld\n", single_sum);
+  printf("   - Thoi gian thuc thi = %d ticks\n\n", single_time);
 
-  // ---------------------------------------------------------
-  // 2. Chạy ĐA LUỒNG (8 Threads song song)
-  // ---------------------------------------------------------
+  // 2. Chay da luong song song (8 Workers)
   mutex_init(&sum_lock);
   global_sum = 0;
   struct slice slices[NUM_WORKERS];
@@ -74,12 +77,7 @@ main(int argc, char *argv[])
     slices[i].start = i * chunk;
     slices[i].end = (i == NUM_WORKERS - 1) ? ARRAY_SIZE : (i + 1) * chunk;
     slices[i].partial_sum = 0;
-
     tids[i] = thread_create(sum_worker, (void *)&slices[i]);
-    if (tids[i] < 0) {
-      printf("Lỗi tạo luồng số %d!\n", i);
-      exit(1);
-    }
   }
 
   for (int i = 0; i < NUM_WORKERS; i++) {
@@ -87,14 +85,14 @@ main(int argc, char *argv[])
   }
   uint multi_time = uptime() - start_tick;
 
-  printf("2. Đa luồng song song (%d Workers):\n", NUM_WORKERS);
-  printf("   - Tổng tính được = %lld\n", global_sum);
-  printf("   - Thời gian thực thi = %d ticks\n\n", multi_time);
+  printf("2. Da luong song song (%d Workers):\n", NUM_WORKERS);
+  printf("   - Tong tinh duoc = %lld\n", global_sum);
+  printf("   - Thoi gian thuc thi = %d ticks\n\n", multi_time);
 
   if (global_sum == single_sum) {
-    printf("[XÁC THỰC] Kết quả 2 phương pháp hoàn toàn trùng khớp!\n");
+    printf("[XAC THUC] Ket qua 2 phuong phap hoan toan trung khop!\n");
   } else {
-    printf("[CẢNH BÁO] Kết quả tính toán không khớp!\n");
+    printf("[CANH BAO] Ket qua tinh toan khong khop!\n");
   }
 
   exit(0);
