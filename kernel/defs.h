@@ -82,6 +82,7 @@ void            printkinit(void);
 int             cpuid(void);
 void            kexit(int);
 int             kfork(void);
+int             kthread_join(int, uint64);
 int             growproc(int, uint64 *);
 int             growproc_lazy(int, uint64 *);
 void            proc_mapstacks(pagetable_t);
