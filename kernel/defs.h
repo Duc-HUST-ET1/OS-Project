@@ -92,6 +92,7 @@ int             kthread_create(uint64, uint64, uint64);
 void            kthread_exit(uint64) __attribute__((noreturn));
 int             kthread_join(int, uint64);
 int             kthread_group_has_siblings(struct proc *);
+int             kthread_join(uint64);
 int             kkill(int);
 int             killed(struct proc*);
 void            setkilled(struct proc*);

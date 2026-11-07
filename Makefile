@@ -29,6 +29,8 @@ OBJS = \
   $K/kernelvec.o \
   $K/plic.o \
   $K/virtio_disk.o \
+  $K/addrspace.o \
+  $K/virtio_disk.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 ifndef TOOLPREFIX
@@ -142,6 +144,9 @@ UPROGS=\
 	$U/_clonecheck\
 	$U/_threadtest\
 	$U/_parallel_sum\
+	$U/_threadtest\
+	$U/_parallel_sum\
+	$U/_clonecheck\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
