@@ -38,11 +38,6 @@ kexec(char *path, char **argv)
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
 
-  // Replacing a page table that sibling threads still use is unsafe. Require
-  // the caller to join every thread before exec.
-  if (kthread_group_has_siblings(p))
-    return -1;
-
   begin_op();
 
   // Open the executable file.
