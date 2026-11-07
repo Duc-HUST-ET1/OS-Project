@@ -41,6 +41,7 @@ mutex_unlock(struct mutex *m)
 static void
 thread_trampoline(void)
 {
+  // Đọc con trỏ tham số trực tiếp từ thanh ghi tp
   register void *tp_reg asm("tp");
   struct trampoline_args *targs = (struct trampoline_args *)tp_reg;
 
@@ -59,8 +60,8 @@ thread_create(void *(*start_routine)(void *), void *arg)
   if (stack_bottom == 0)
     return -1;
 
-  uint64 sp = (uint64)stack_bottom + THREAD_STACK_SIZE;
-  sp = sp & ~((uint64)15);
+  // Tính đỉnh stack căn chỉnh 16 bytes (lấy stack + 2048 để luôn nằm trong vùng an toàn)
+  uint64 sp = ((uint64)stack_bottom + 2048) & ~((uint64)15);
 
   sp -= sizeof(struct trampoline_args);
   sp = sp & ~((uint64)15);
@@ -96,17 +97,17 @@ thread_exit(void *retval)
 int
 thread_join(int tid, void **retval)
 {
-  int status = 0;
-  // Gọi join syscall (nối với kwait để cha đợi con hoàn tất)
-  int reaped_tid = join((void **)(uint64)&status);
+  uint64 status = 0;
+  // Gọi hàm join chuẩn của Đức: join(tid, &status)
+  int reaped_tid = join(tid, &status);
   
   if (reaped_tid > 0) {
     if (retval)
-      *retval = (void *)(uint64)status;
+      *retval = (void *)status;
 
     mutex_lock(&table_lock);
     for (int i = 0; i < MAX_USER_THREADS; i++) {
-      if (thread_table[i].tid == reaped_tid) {
+      if (thread_table[i].tid == reaped_tid || thread_table[i].tid == tid) {
         free(thread_table[i].stack_bottom);
         thread_table[i].stack_bottom = 0;
         thread_table[i].tid = 0;

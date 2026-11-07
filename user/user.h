@@ -28,7 +28,7 @@ int sync(void);
 int hello(void);
 int procinfo(void);
 int clone(void (*fcn)(void), void *stack, void *tls);
-int join(void **stack);
+int join(int, uint64 *);
 
 // ulib.c
 int stat(const char *, struct stat *);

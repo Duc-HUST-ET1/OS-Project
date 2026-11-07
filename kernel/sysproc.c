@@ -42,6 +42,24 @@ sys_clone(void)
 }
 
 uint64
+sys_thread_exit(void)
+{
+  uint64 retval;
+  argaddr(0, &retval);
+  kthread_exit(retval);
+}
+
+uint64
+sys_join(void)
+{
+  int tid;
+  uint64 retval_addr;
+  argint(0, &tid);
+  argaddr(1, &retval_addr);
+  return kthread_join(tid, retval_addr);
+}
+
+uint64
 sys_wait(void)
 {
   uint64 p;
@@ -157,13 +175,4 @@ sys_procinfo(void)
   kfree(mem);
 
   return 0;
-}
-
-
-uint64
-sys_join(void)
-{
-  uint64 p;
-  argaddr(0, &p);
-  return kwait(p);
 }
