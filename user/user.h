@@ -27,9 +27,8 @@ int uptime(void);
 int sync(void);
 int hello(void);
 int procinfo(void);
-int clone(void (*fcn)(void), void *stack, void *tls);
-int join(int, uint64 *);
-void thread_exit(uint64) __attribute__((noreturn));
+int clone(void(*fcn)(void*), void *arg, void *stack);
+int join(void **stack);
 
 // ulib.c
 int stat(const char *, struct stat *);

@@ -28,9 +28,14 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
-  $K/virtio_disk.o \
+  $K/addrspace.o \
+  $K/virtio_disk.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
+# perhaps in /opt/riscv/bin
+#TOOLPREFIX = 
+
+# Try to infer the correct TOOLPREFIX if not set
 ifndef TOOLPREFIX
 TOOLPREFIX := $(shell if riscv64-unknown-elf-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
 	then echo 'riscv64-unknown-elf-'; \
@@ -44,7 +49,8 @@ TOOLPREFIX := $(shell if riscv64-unknown-elf-objdump -i 2>&1 | grep 'elf64-big' 
 	then echo 'riscv64-unknown-linux-gnu-'; \
 	else echo "***" 1>&2; \
 	echo "*** Error: Couldn't find a riscv64 version of GCC/binutils." 1>&2; \
-	exit 1; fi)
+	echo "*** To turn off this error, run 'gmake TOOLPREFIX= ...'." 1>&2; \
+	echo "***" 1>&2; exit 1; fi)
 endif
 
 QEMU = qemu-system-riscv64
@@ -55,6 +61,7 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
+# Deterministic builds.
 DETFLAGS = -ffile-prefix-map=$(CURDIR)=.
 
 CFLAGS = -Wall -Werror -Wno-unknown-attributes -O -fno-omit-frame-pointer -ggdb -gdwarf-2
@@ -74,6 +81,7 @@ CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
 CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
+# Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
 CFLAGS += -fno-pie -no-pie
 endif
@@ -108,12 +116,18 @@ $U/usys.o : $U/usys.S
 	$(CC) $(CFLAGS) -c -o $U/usys.o $U/usys.S
 
 $U/_forktest: $U/forktest.o $(ULIB)
+	# forktest has less library code linked in - needs to be small
+	# in order to be able to max out the proc table.
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o
 	$(OBJDUMP) -S $U/_forktest > $U/forktest.asm
 
 mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 	gcc -Wno-unknown-attributes -I. -o mkfs/mkfs mkfs/mkfs.c
 
+# Prevent deletion of intermediate files, e.g. cat.o, after first build, so
+# that disk image changes after first build are persistent until clean.  More
+# details:
+# http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
 .PRECIOUS: %.o
 
 UPROGS=\
@@ -139,9 +153,10 @@ UPROGS=\
 	$U/_sync\
 	$U/_hello\
 	$U/_procinfo\
-	$U/_clonecheck\
 	$U/_threadtest\
+	$U/_clonecheck\
 	$U/_parallel_sum\
+	$U/_leaktest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
@@ -156,7 +171,9 @@ clean:
         $U/usys.S \
 	$(UPROGS)
 
+# try to generate a unique GDB port
 GDBPORT = $(shell expr `id -u` % 5000 + 25000)
+# QEMU's gdb stub command line changed in 0.11
 QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
 	else echo "-s -p $(GDBPORT)"; fi)
