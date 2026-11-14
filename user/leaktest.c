@@ -25,6 +25,109 @@ light_worker(void *arg)
   return 0;
 }
 
+// ============================================================================
+// [TEST 4 - TUAN 4] Kiem thu luong con (tf_slot > 0) goi fork(), exec(), exit()
+// trong khi cac luong anh em van dang hoat dong tren cung struct addrspace.
+// ============================================================================
+
+static volatile int sibling_alive = 0;
+
+// Luong anh em chay song song doc/ghi bo nho chung trong luc luong khac fork/exec
+static void *
+sibling_stress_worker(void *arg)
+{
+  uint64 *shared_buf = (uint64 *)arg;
+  for (int i = 0; i < 2000; i++) {
+    shared_buf[i % 64] = (uint64)i * 3 + 7;
+    if ((i % 400) == 0)
+      pause(1); // Nhuong CPU de kich hoat lap lich da nhan (CPUS=4)
+  }
+  sibling_alive = 1;
+  return 0;
+}
+
+// Luong con (chay o tf_slot > 0) truc tiep thuc hien fork() va exec()
+static void *
+fork_exec_worker(void *arg)
+{
+  int round = (int)(uint64)arg;
+
+  // 1. Luong con o slot > 0 goi fork() -> kiem tra as_copy_for_fork()
+  int pid = fork();
+  if (pid < 0) {
+    printf("  [FAIL] Round %d: fork() tu worker thread that bai!\n", round);
+    exit(1);
+  }
+
+  if (pid == 0) {
+    // Tien trinh con moi tao tu worker thread:
+    // Phai co struct addrspace rieng, chay o tf_slot = 0.
+    // Bay gio goi tiep exec() de kiem tra as_replace_on_exec() & proc_pagetable()!
+    if (round == 0 || round == 19) {
+      char *argv[] = { "echo", "  -> [OK] Worker fork+exec image moi thanh cong!", 0 };
+      exec("echo", argv);
+      printf("  [FAIL] exec() trong tien trinh con that bai!\n");
+      exit(3);
+    } else {
+      // O cac vong giua, test nhanh viec tach addrspace, sbrk va exit ngay
+      char *pointer_check = sbrk(4096);
+      if (pointer_check == (char *)-1)
+        exit(2);
+      pointer_check[0] = 0x5A;
+      exit(0);
+    }
+  }
+
+  // Worker thread doi tien trinh con do chinh no fork ra ket thuc
+  int xstate = -1;
+  int wpid = wait(&xstate);
+  if (wpid != pid || xstate != 0) {
+    printf("  [FAIL] Round %d: wait() loi (wpid=%d, xstate=%d)\n", round, wpid, xstate);
+    exit(4);
+  }
+
+  return 0;
+}
+
+static void
+test4_multithread_fork_exec(void)
+{
+  printf("[TEST 4] Kiem tra luong con (tf_slot > 0) goi fork(), exec() & exit() an toan...\n");
+
+  uint64 *shared_buf = (uint64 *)sbrk(4096);
+  if (shared_buf == (uint64 *)-1) {
+    printf("  [FAIL] Khong the sbrk bo nho chung cho Test 4!\n");
+    exit(1);
+  }
+
+  // Chay 20 chu ky lien tiep: moi chu ky 2 luong con chay song song
+  // (1 luong cay bo nho tren shared addrspace, 1 luong o slot > 0 goi fork + exec)
+  for (int r = 0; r < 20; r++) {
+    sibling_alive = 0;
+
+    int t_sib = thread_create(sibling_stress_worker, (void *)shared_buf);
+    int t_fe  = thread_create(fork_exec_worker, (void *)(uint64)r);
+
+    if (t_sib < 0 || t_fe < 0) {
+      printf("  [FAIL] Round %d: Khong tao duoc worker thread!\n", r);
+      exit(1);
+    }
+
+    if (thread_join(t_fe, 0) < 0 || thread_join(t_sib, 0) < 0) {
+      printf("  [FAIL] Round %d: thread_join that bai trong Test 4!\n", r);
+      exit(1);
+    }
+
+    if (!sibling_alive) {
+      printf("  [FAIL] Round %d: Luong anh em bi anh huong khi luong kia fork/exec!\n", r);
+      exit(1);
+    }
+  }
+
+  sbrk(-4096);
+  printf("  [PASS] Hoan tat 20 chu ky worker thread goi fork/exec/exit! Khong crash, khong panic.\n\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -64,7 +167,7 @@ main(int argc, char *argv[])
   // -----------------------------------------------------------------
   // TEST 2: Concurrent batch clone/join (50 rounds x 8 threads = 400 threads)
   // -----------------------------------------------------------------
-  printf("[TEST 2] Kiem tra dong bo as->refcount đa luong (%d dot x %d threads = %d threads)...\n",
+  printf("[TEST 2] Kiem tra dong bo as->refcount da luong (%d dot x %d threads = %d threads)...\n",
          BATCH_ROUNDS, BATCH_SIZE, BATCH_ROUNDS * BATCH_SIZE);
   shared_counter = 0;
 
@@ -112,6 +215,11 @@ main(int argc, char *argv[])
     exit(1);
   }
   printf("  [PASS] Mo rong va thu hoi 4 trang Heap thanh cong, khong gay panic freewalk: leaf!\n\n");
+
+  // -----------------------------------------------------------------
+  // TEST 4: Worker thread (tf_slot > 0) calling fork(), exec() & exit()
+  // -----------------------------------------------------------------
+  test4_multithread_fork_exec();
 
   printf("=== [XAC THUC] TAT CA CAC BAI TEST RO RI BO NHO DEU PASS 100%%! ===\n");
   exit(0);
