@@ -55,8 +55,13 @@ kexec(char *path, char **argv)
   if (elf.magic != ELF_MAGIC)
     goto bad;
 
-  if ((pagetable = proc_pagetable(p)) == 0)
-    goto bad;
+  // New address space after exec always starts as single-threaded at slot 0.
+  uint64 saved_tf_va = p->trapframe_va;
+  p->trapframe_va = THREAD_TRAPFRAME(0);
+  pagetable = proc_pagetable(p);
+  p->trapframe_va = saved_tf_va;
+  if (pagetable == 0)
+  goto bad;
 
   // Load program into memory.
   for (i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph)) {
@@ -148,7 +153,7 @@ kexec(char *path, char **argv)
 
 bad:
   if (pagetable)
-    proc_freepagetable(pagetable, sz, p->trapframe_va);
+    proc_freepagetable(pagetable, sz, THREAD_TRAPFRAME(0));
   if (ip) {
     iunlockput(ip);
     end_op();

@@ -154,7 +154,7 @@ as_release(struct proc *p)
     as->valid = 0;
     release(&as->lock);
 
-    if (pt) {
+   if (pt) {
       // Unmap shared TRAMPOLINE and free all user physical pages [0 .. sz)
       uvmunmap(pt, TRAMPOLINE, 1, 0);
       if (sz > TRAPFRAME)
@@ -211,7 +211,8 @@ as_copy_for_fork(struct addrspace *src_as, struct proc *child_p)
 
   acquire(&src_as->lock);
   uint64 sz = src_as->sz;
-  if (uvmcopy(src_as->pagetable, child_p->as->pagetable, sz) < 0) {
+  uint64 copy_sz = (sz > TRAPFRAME) ? TRAPFRAME : sz;
+  if (uvmcopy(src_as->pagetable, child_p->as->pagetable, copy_sz) < 0) {
     release(&src_as->lock);
     return -1;
   }
@@ -229,19 +230,22 @@ as_copy_for_fork(struct addrspace *src_as, struct proc *child_p)
 void
 as_replace_on_exec(struct proc *p, struct addrspace *new_as)
 {
-  if (p == 0 || new_as == 0)
-    return;
+if (p == 0 || new_as == 0)
+ return;
 
-  if (p->as) {
-    as_release(p);
-  }
+if (p->as) {
+ as_release(p);
+}
 
-  p->as = new_as;
-  p->pagetable = new_as->pagetable;
-  p->sz = new_as->sz;
-  p->tf_slot = 0;
-  p->trapframe_va = THREAD_TRAPFRAME(0);
-  p->owns_pagetable = 1;
+p->as = new_as;
+p->pagetable = new_as->pagetable;
+p->sz = new_as->sz;
+p->tf_slot = 0;
+p->trapframe_va = THREAD_TRAPFRAME(0);
+p->owns_pagetable = 1;
+p->is_thread = 0;
+p->tgid = p->pid;
+asm volatile("sfence.vma zero, zero");
 }
 
 // Thread-safe copyin wrapper
