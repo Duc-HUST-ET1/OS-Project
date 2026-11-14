@@ -55,6 +55,7 @@ procinit(void)
 {
   struct proc *p;
 
+  as_init();
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {
@@ -104,22 +105,11 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
 {
   struct proc *parent = myproc();
   struct proc *np;
+  struct addrspace *as = parent->as;
   pte_t *pte;
   int fd, tid;
 
-  if (parent->as == 0)
-    return -1;
-
-  if ((stack & 15) != 0 || parent->sz < 2 * sizeof(uint64) ||
-      stack > parent->sz - 2 * sizeof(uint64) || entry >= parent->sz)
-    return -1;
-  pte = walk(parent->pagetable, entry, 0);
-  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_X)) !=
-                      (PTE_V | PTE_U | PTE_X))
-    return -1;
-  pte = walk(parent->pagetable, stack, 0);
-  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_W)) !=
-                      (PTE_V | PTE_U | PTE_W))
+  if (as == 0)
     return -1;
 
   if ((np = allocproc()) == 0)
@@ -130,50 +120,56 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
   as_release(np);
   release(&np->lock);
 
+  // Hold the group gate until the new thread is fully published. An exec
+  // reservation therefore either sees this thread or prevents its creation.
+  acquire(&as->group_lock);
+  if (parent->as != as || as->execing || as->exiting)
+    goto fail_group;
+
+  if ((stack & 15) != 0 || parent->sz < 2 * sizeof(uint64) ||
+      stack > parent->sz - 2 * sizeof(uint64) || entry >= parent->sz)
+    goto fail_group;
+  pte = walk(parent->pagetable, entry, 0);
+  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_X)) !=
+                      (PTE_V | PTE_U | PTE_X))
+    goto fail_group;
+  pte = walk(parent->pagetable, stack, 0);
+  if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_W)) !=
+                      (PTE_V | PTE_U | PTE_W))
+    goto fail_group;
+
   acquire(&parent->as->lock);
   // Revalidate while page-table changes are serialized under parent->as->lock
   if ((stack & 15) != 0 || parent->as->sz < 2 * sizeof(uint64) ||
       stack > parent->as->sz - 2 * sizeof(uint64) || entry >= parent->as->sz) {
     release(&parent->as->lock);
-    acquire(&np->lock);
-    freeproc(np);
-    release(&np->lock);
-    return -1;
+    goto fail_group;
   }
   pte = walk(parent->as->pagetable, entry, 0);
   if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_X)) !=
                       (PTE_V | PTE_U | PTE_X)) {
     release(&parent->as->lock);
-    acquire(&np->lock);
-    freeproc(np);
-    release(&np->lock);
-    return -1;
+    goto fail_group;
   }
   pte = walk(parent->as->pagetable, stack, 0);
   if (pte == 0 || (*pte & (PTE_V | PTE_U | PTE_W)) !=
                       (PTE_V | PTE_U | PTE_W)) {
     release(&parent->as->lock);
-    acquire(&np->lock);
-    freeproc(np);
-    release(&np->lock);
-    return -1;
+    goto fail_group;
   }
   release(&parent->as->lock);
 
   // Retain shared address space and map private trapframe slot [1..15]
-  if (as_retain_for_clone(parent->as, np) < 0) {
-    acquire(&np->lock);
-    freeproc(np);
-    release(&np->lock);
-    return -1;
+  if (as_retain_for_clone(as, np) < 0) {
+    goto fail_group;
   }
 
- np->is_thread = 1;
+  np->is_thread = 1;
   np->tgid = parent->tgid;
   np->trapframe->epc = entry;
   np->trapframe->sp = stack;
   np->trapframe->tp = tls;
-  np->trapframe->a0 = tls; 
+  np->trapframe->a0 = tls;
   safestrcpy(np->name, parent->name, sizeof(np->name));
   tid = np->pid;
 
@@ -188,29 +184,83 @@ kthread_create(uint64 entry, uint64 stack, uint64 tls)
   np->state = RUNNABLE;
   release(&np->lock);
   release(&wait_lock);
+  release(&as->group_lock);
   return tid;
+
+fail_group:
+  release(&as->group_lock);
+  acquire(&np->lock);
+  freeproc(np);
+  release(&np->lock);
+  return -1;
 }
 
+void
+kthread_exit(uint64 retval)
+{
+  struct proc *p = myproc();
+  struct proc *leader = 0;
+
+  if (!p->is_thread)
+    kexit((int)retval);
+
+  for (int fd = 0; fd < NOFILE; fd++) {
+    if (p->ofile[fd]) {
+      fileclose(p->ofile[fd]);
+      p->ofile[fd] = 0;
+    }
+  }
+  begin_op();
+  iput(p->cwd);
+  end_op();
+  p->cwd = 0;
+
+  acquire(&wait_lock);
+  for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
+    if (tp->pid == p->tgid && !tp->is_thread && tp->state != UNUSED) {
+      leader = tp;
+      break;
+    }
+  }
+  wakeup(p->parent);
+  if (leader && leader != p)
+    wakeup(leader);
+  acquire(&p->lock);
+  p->xstate64 = retval;
+  p->xstate = (int)retval;
+  p->state = ZOMBIE;
+  release(&wait_lock);
+  sched();
+  panic("thread zombie exit");
+}
+
+// Join one exact TID in the caller's process group. Copy the full-width
+// result before releasing the thread's address-space reference and slot.
 int
-kthread_join(uint64 stack_out_va)
+kthread_join(int tid, uint64 retval_addr)
 {
   struct proc *np;
-  int havekids, pid;
   struct proc *p = myproc();
+  uint64 retval;
+  int found;
+
+  if (tid <= 0 || p->as == 0)
+    return -1;
 
   acquire(&wait_lock);
 
   for (;;) {
-    havekids = 0;
+    found = 0;
     for (np = proc; np < &proc[NPROC]; np++) {
-      if (np->parent == p && np->is_thread) {
-        acquire(&np->lock);
-        havekids = 1;
+      acquire(&np->lock);
+      if (np->pid == tid && np->tgid == p->tgid && np->is_thread &&
+          np != p) {
+        found = 1;
         if (np->state == ZOMBIE) {
-          pid = np->pid;
-          uint64 sp = np->trapframe->sp;
-          if (stack_out_va != 0 &&
-              copyout(p->pagetable, p->sz, stack_out_va, (char *)&sp, sizeof(sp)) < 0) {
+          retval = np->xstate64;
+          if (retval_addr != 0 &&
+              as_copyout(p->as, retval_addr, (char *)&retval,
+                         sizeof(retval)) < 0) {
             release(&np->lock);
             release(&wait_lock);
             return -1;
@@ -218,13 +268,13 @@ kthread_join(uint64 stack_out_va)
           freeproc(np);
           release(&np->lock);
           release(&wait_lock);
-          return pid;
+          return tid;
         }
-        release(&np->lock);
       }
+      release(&np->lock);
     }
 
-    if (!havekids || killed(p)) {
+    if (!found || killed(p)) {
       release(&wait_lock);
       return -1;
     }
@@ -515,6 +565,31 @@ reparent(struct proc *p)
   }
 }
 
+// Close clone admission first, then request termination for every schedulable
+// context in the target process group. group_lock makes this atomic with the
+// clone publication path.
+static void
+request_group_exit(int tgid, struct addrspace *as)
+{
+  if (as) {
+    acquire(&as->group_lock);
+    as->exiting = 1;
+    as->execing = 0;
+    release(&as->group_lock);
+  }
+
+  for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
+    acquire(&tp->lock);
+    if (tp->state != UNUSED && tp->tgid == tgid &&
+        tp->state != ZOMBIE) {
+      tp->killed = 1;
+      if (tp->state == SLEEPING)
+        tp->state = RUNNABLE;
+    }
+    release(&tp->lock);
+  }
+}
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -522,9 +597,13 @@ void
 kexit(int status)
 {
   struct proc *p = myproc();
+  struct addrspace *as = p->as;
+  struct proc *leader = 0;
 
   if (p == initproc)
     panic("init exiting");
+
+  request_group_exit(p->tgid, as);
 
   // Close all open files.
   for (int fd = 0; fd < NOFILE; fd++) {
@@ -542,6 +621,45 @@ kexit(int status)
 
   acquire(&wait_lock);
 
+  // The leader owns process-level wait/reap. Keep the shared address space
+  // alive until all worker contexts have reached ZOMBIE, then reclaim them.
+  if (!p->is_thread) {
+    int active;
+    do {
+      active = 0;
+      for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
+        if (tp == p)
+          continue;
+        acquire(&tp->lock);
+        if (tp->tgid == p->tgid && tp->is_thread &&
+            tp->state != UNUSED && tp->state != ZOMBIE) {
+          tp->killed = 1;
+          if (tp->state == SLEEPING)
+            tp->state = RUNNABLE;
+          active = 1;
+        }
+        release(&tp->lock);
+      }
+      if (active) {
+        sleep_prepare(p);
+        release(&wait_lock);
+        sleep();
+        acquire(&wait_lock);
+      }
+    } while (active);
+
+    for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
+      if (tp == p)
+        continue;
+      acquire(&tp->lock);
+      if (tp->tgid == p->tgid && tp->is_thread && tp->state == ZOMBIE) {
+        tp->parent = 0;
+        freeproc(tp);
+      }
+      release(&tp->lock);
+    }
+  }
+
   // Give any children to init.
   reparent(p);
 
@@ -552,6 +670,21 @@ kexit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
+
+  // A thread can be the creator of the group's worker that the leader is
+  // waiting for. Notify the leader explicitly after publishing ZOMBIE.
+  leader = 0;
+  for (struct proc *tp = proc; tp < &proc[NPROC]; tp++) {
+    if (tp->pid == p->tgid && !tp->is_thread && tp->state != UNUSED) {
+      leader = tp;
+      break;
+    }
+  }
+  if (leader && leader != p) {
+    release(&p->lock);
+    wakeup(leader);
+    acquire(&p->lock);
+  }
 
   release(&wait_lock);
 
@@ -575,7 +708,7 @@ kwait(uint64 addr)
     // Scan through table looking for exited children.
     havekids = 0;
     for (pp = proc; pp < &proc[NPROC]; pp++) {
-      if (pp->parent == p) {
+      if (pp->parent == p && !pp->is_thread) {
         // make sure the child isn't still in exit() or swtch().
         acquire(&pp->lock);
 
@@ -797,24 +930,27 @@ int
 kkill(int pid)
 {
   struct proc *p;
+  struct addrspace *as = 0;
+  int tgid = -1;
 
   if (pid == 0)
     return -1;
 
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
-    if (p->pid == pid) {
-      p->killed = 1;
-      if (p->state == SLEEPING) {
-        // Wake process from sleep().
-        p->state = RUNNABLE;
-      }
+    if (p->pid == pid && p->state != UNUSED) {
+      tgid = p->tgid;
+      as = p->as;
       release(&p->lock);
-      return 0;
+      break;
     }
     release(&p->lock);
   }
-  return -1;
+  if (tgid < 0)
+    return -1;
+
+  request_group_exit(tgid, as);
+  return 0;
 }
 
 void

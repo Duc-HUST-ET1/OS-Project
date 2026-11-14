@@ -23,6 +23,10 @@ struct proc;
 
 // Shared address-space descriptor
 struct addrspace {
+  // Serializes clone admission with exec/group shutdown decisions.
+  struct spinlock group_lock;
+  int execing;               // exec has reserved this group; reject new clones
+  int exiting;               // process-wide exit has closed clone admission
   struct spinlock lock;      // Protects pagetable mutations, sz, and tf_used_bitmap
   pagetable_t pagetable;     // Shared Sv39 user page table
   uint64 sz;                 // Authoritative shared memory size (bytes)
