@@ -69,51 +69,56 @@ second join after reap.
 - concurrent file-table changes and `exec` need group-level integration
 - inadequate cross-review of kernel lifecycle code
 
-## Task 2 progress (Member B; R3/R4 preparation)
+## Task 2 progress (Member B; R3/R4 completed)
 
-- Added `thread_exit(uint64 retval)` and `join(tid, uint64 *retval)` syscalls.
-  A thread records its full 64-bit result when it becomes a zombie. `join`
-  accepts only the exact TID in the caller's thread group, copies the result
-  out before reaping, and releases that thread's trapframe mapping.
-- Updated the `clonecheck` guest program to verify a nontrivial 64-bit return
-  value (`0x123456789abcdef0`), reject a wrong TID, and reject a second reap.
-  Build and QEMU output:
-  `clonecheck: SUMMARY PASS (6/6 checks)` with each passed behavior printed
-  separately.
-- `fork` now serializes the address-space copy with shared-page-table growth.
-  A process child is assigned to the thread-group leader so the leader can
-  reap it with `wait`.
-- `wait` ignores thread contexts; those are reaped by `join`. `kill(pid)`
-  treats the PID as a process-group target and marks every context with that
-  `tgid` as killed. Killed worker threads take the thread-exit path.
-- `exec` returns `-1` while any sibling context remains allocated. The caller
-  must join siblings first, avoiding replacement of a page table still used
-  by another thread.
+- Added `thread_exit(uint64 retval)` and `join(tid, uint64 *retval)`. Join is
+  scoped to an exact TID in the caller's group, copies all 64 result bits
+  before reaping, and releases the worker's trapframe mapping.
+- Policy: `wait` reaps process children only; `join` reaps thread contexts.
+  `kill(pid)` resolves the target's `tgid` and stops every context in that
+  process group. The leader waits for workers to stop and reaps them before it
+  becomes waitable.
+- Policy: `fork` creates a single-threaded child from the calling context.
+  The child remains parented to that caller, so a worker can `wait` for a
+  child it forked and can `exec` that child independently.
+- Policy: `exec` is rejected while sibling contexts remain. `addrspace.group_lock`
+  serializes clone publication against exec's refcount check and reservation;
+  `execing` stays set while the image is built, so later clones fail until
+  commit or failure cleanup. The same group gate closes clone admission during
+  process-wide shutdown. This prevents a newly published thread from entering
+  a page table while it is being replaced or torn down.
+- The user-space `thread.c` change only bridges Member C's existing API to the
+  exact-TID join and full-width thread-exit syscalls; it does not change the
+  mutex or stack-allocation design.
+
+### Verification evidence
+
+Built the kernel and guest programs, then ran `lifecyclecheck` and
+`usertests -q` under QEMU with `CPUS=4`. `lifecyclecheck` passed all seven
+policy checks: wait/thread separation, exact-TID join and 64-bit retval, exec
+rejection with a live sibling, worker fork/wait/exec, reservation cleanup after
+a missing executable, 100 clone/join cycles around rejected exec, and
+process-wide kill followed by parent wait/reap. It printed
+`lifecyclecheck: SUMMARY PASS (7 policy checks)`. The regression suite ended
+with `ALL TESTS PASSED`. `threadtest` and `leaktest` also passed their
+multithreaded return/counter and repeated lifecycle checks on `CPUS=4`.
 
 ### Policy decisions and rationale
 
-- **Join is TID-specific and group-scoped.** A caller cannot reap another
-  process's thread or accidentally consume a different worker's result. The
-  result uses `uint64` end to end to preserve pointers and other RV64 values.
-- **`wait` is for child processes; `join` is for threads.** This keeps the
-  legacy `wait(int *)` exit-status contract intact while giving threads a
-  separate full-width result contract.
-- **`kill(pid)` is process-wide.** A process cannot safely continue with only
-  an arbitrary subset of its threads after external termination. The supplied
-  PID identifies the group through `tgid`.
-- **`fork` creates a single-threaded child from the calling context's memory
-  image.** The copied register state belongs to the caller, and the new child
-  starts its own group; serializing the copy prevents overlap with `sbrk`.
-- **`exec` requires siblings to be joined first.** Rejecting it is a small,
-  explicit policy that avoids invalidating a shared page table underneath
-  running threads.
+- **Join is TID-specific and group-scoped.** This prevents a caller from
+  reaping another process's thread or consuming a different worker's result.
+  `uint64` preserves pointer-sized results on RV64.
+- **`wait` is for child processes; `join` is for threads.** This preserves the
+  existing integer process exit status while giving thread results a separate
+  full-width contract.
+- **`kill(pid)` is process-wide.** Shared process state cannot safely continue
+  under an arbitrary subset of contexts after a kill request.
+- **`fork` uses the calling context.** The new child inherits that context's
+  memory/register image and parent relation, and starts single-threaded; this
+  lets a worker own and wait for its child.
+- **`exec` requires siblings to be joined first.** Swapping the shared page
+  table while siblings use it would invalidate their execution state. The group
+  lock and reservation close the clone/exec check-then-publish race.
 
-When a process leader exits, it now kills and reaps its remaining worker
-contexts before becoming a waitable zombie, so the shared page table stays
-valid. A worker that invokes the legacy process `exit()` syscall itself is
-still outside the supported user-thread contract; user workers must use
-`thread_exit`. Atomic exclusion between a concurrent `clone` and `exec` also
-needs a group lifecycle lock/API. The current `exec` sibling scan enforces the
-policy in the ordinary serialized path, but is not a complete concurrency
-barrier. The QEMU check covers thread return and reap; it does not claim
-coverage of group-wide races or the kill/wait/fork/exec matrix.
+The stress test exercises the public clone/exec policy on four CPUs but does
+not deterministically inject every internal instruction-level interleaving.

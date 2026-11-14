@@ -163,8 +163,19 @@ sys_procinfo(void)
 uint64
 sys_join(void)
 {
-  uint64 stack_out;
+  int tid;
+  uint64 retval_addr;
 
-  argaddr(0, &stack_out);
-  return kthread_join(stack_out);
+  argint(0, &tid);
+  argaddr(1, &retval_addr);
+  return kthread_join(tid, retval_addr);
+}
+
+uint64
+sys_thread_exit(void)
+{
+  uint64 retval;
+
+  argaddr(0, &retval);
+  kthread_exit(retval);
 }

@@ -157,6 +157,7 @@ UPROGS=\
 	$U/_clonecheck\
 	$U/_parallel_sum\
 	$U/_leaktest\
+	$U/_lifecyclecheck\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

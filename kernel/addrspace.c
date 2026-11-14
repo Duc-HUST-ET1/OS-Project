@@ -33,12 +33,15 @@ void
 as_init(void)
 {
   for (int i = 0; i < NPROC; i++) {
+    initlock(&as_table[i].group_lock, "as_group");
     initlock(&as_table[i].lock, "addrspace");
     as_table[i].pagetable = 0;
     as_table[i].sz = 0;
     as_table[i].refcount = 0;
     as_table[i].tf_used_bitmap = 0;
     as_table[i].valid = 0;
+    as_table[i].execing = 0;
+    as_table[i].exiting = 0;
   }
 }
 
@@ -48,17 +51,24 @@ as_alloc(void)
 {
   for (int i = 0; i < NPROC; i++) {
     struct addrspace *as = &as_table[i];
+    // Prevent reuse while an old group's lifecycle operation still owns this
+    // descriptor's group lock (notably across the exec commit).
+    acquire(&as->group_lock);
     acquire(&as->lock);
     if (!as->valid) {
       as->valid = 1;
+      as->execing = 0;
+      as->exiting = 0;
       as->pagetable = 0;
       as->sz = 0;
       as->refcount = 1;
       as->tf_used_bitmap = (1U << 0); // Slot 0 reserved for Main Thread
       release(&as->lock);
+      release(&as->group_lock);
       return as;
     }
     release(&as->lock);
+    release(&as->group_lock);
   }
   return 0;
 }
@@ -151,6 +161,8 @@ as_release(struct proc *p)
     as->pagetable = 0;
     as->sz = 0;
     as->tf_used_bitmap = 0;
+    as->execing = 0;
+    as->exiting = 0;
     as->valid = 0;
     release(&as->lock);
 

@@ -1,67 +1,44 @@
-# Proposed syscall API
+# Thread syscall API
 
-This document is intentionally a proposal and must be clearly distinguished from implemented upstream xv6 syscalls.
-
-## Proposed interfaces
-
-The following syscalls are planned for the project and are not part of the stock xv6 ABI unless explicitly added during implementation.
+The following thread syscalls extend the xv6 project ABI.
 
 ```c
-int clone(void (*entry)(void), void *stack, void *tls);
-int join(int thread_id, void **retval);
-int thread_exit(uint64_t retval);
+int clone(void (*entry)(void *), void *arg, void *stack);
+int join(int tid, uint64 *retval);
+void thread_exit_sys(uint64 retval);
 ```
 
-`clone` receives the user entry point explicitly, `stack` is the 16-byte-aligned
-initial stack pointer that addresses the startup record, and `tls` initializes
-the child's `tp` register. The kernel core is exposed as `kthread_create(entry,
-stack, tls)`. B5 registers `clone` with syscall number 25 and adds the user
-prototype and assembly stub. `join` and `thread_exit` require the lifecycle
-operations from B4 before their handlers can be registered.
+The user library exposes `thread_exit(void *)`; its assembly wrapper is named
+`thread_exit_sys` to avoid colliding with that C function. Syscall numbers are
+`clone=25`, `join=26`, and `thread_exit=27`.
 
-## R2 ABI decisions from Member C feedback
+`clone` creates a context sharing the current address space. Its stack pointer
+is 16-byte aligned and points to the startup record read by the user trampoline.
+The `arg` value initializes both child `a0` and `tp` (the library passes its
+startup-record pointer there). The new context has a distinct TID and trapframe
+mapping. It is made `RUNNABLE` only after proc metadata and shared mappings are
+ready.
 
-- A newly created child returns from the clone syscall with `a0 = 0`.
-- The user library supplies a stack whose top is 16-byte aligned. The proposed
-  startup record contains the start routine and its argument; a user
-  trampoline invokes the routine and passes its pointer result to thread exit.
-- Exit results and user addresses use RV64 `uint64` values end to end. `join`
-  copies exactly eight bytes to the caller's result pointer.
-- `join` returns the reaped TID on success and `-1` on failure.
+`thread_exit_sys` ends one context and records a full-width 64-bit result.
+`join(tid, retval)` blocks for that exact TID in the caller's group, copies
+eight bytes to `retval` when non-null, releases the thread's trapframe mapping
+and proc slot, and returns the reaped TID. Invalid, foreign, non-thread, or
+already-reaped TIDs return `-1`.
 
-The explicit entry argument resolves the discrepancy between the fixed
-user-trampoline contract and the earlier `clone(flags, stack, tls)` summary.
-The user library passes `thread_trampoline` as `entry`; the kernel does not
-interpret function pointers or startup records.
+## Process policy for multithreaded groups
 
-## Arguments and return values
+- `wait` reaps child processes and skips thread contexts.
+- `kill(pid)` targets the process group containing that PID and requests exit
+  for every context in that group. The parent's `wait` reaps the leader.
+- `fork` creates a single-threaded child from the calling context. The child is
+  parented to the caller, including when a worker performs the fork.
+- `exec` returns `-1` while another context still references the address space.
+  Join siblings first. A group lock and `execing` reservation serialize this
+  check with clone publication.
+- Process `exit` shuts down all contexts in the group; worker-only termination
+  uses the dedicated thread exit syscall.
 
-- `clone`: creates a new kernel thread that shares the current process address space.
-- `join`: blocks until the target thread exits and returns its exit status.
-- `thread_exit`: terminates a single thread while leaving shared process resources alive if other threads remain.
-
-Return values:
-
-- non-negative value on success
-- `-1` on invalid arguments or failure with an error code in the caller-visible convention used by the project
-
-## Distinction from implemented interfaces
-
-The upstream xv6 kernel does not currently define these syscalls as part of the stock ABI. This document reflects a design target, not a claim that the repository already implements the interface.
-
-## Required review before implementation
-
-- mapping to `syscall` numbers in `kernel/syscall.c`
-- user-space wrapper definitions in `user/usys.pl` and `user/user.h`
-- whether the thread API should use traditional process-surrogate semantics or a dedicated thread ID type
-- whether `kill` and `wait` require changes for multithreaded process semantics
-
-## Error cases
-
-The implementation should clearly handle:
-
-- invalid thread IDs
-- join on a thread that was never created or already reaped
-- attempts to join a process rather than a thread
-- stack or argument validation failures
-- resource-allocation errors during thread creation
+The group lock protects clone admission, exec reservation/commit, and group
+shutdown. The address-space lock protects page-table, size, trapframe-slot, and
+reference-count updates. The `wait_lock` is acquired before proc locks for
+parent/child and join operations.

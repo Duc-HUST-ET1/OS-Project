@@ -8,7 +8,8 @@
 
 ## Status
 
-This is a placeholder report. No implementation claims are made.
+This report is retained as a placeholder for Week 3. Member B's R3/R4
+implementation results and test evidence are recorded in `week-04.md`.
 
 ## Planned work
 

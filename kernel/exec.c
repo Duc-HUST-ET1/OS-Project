@@ -37,13 +37,37 @@ kexec(char *path, char **argv)
   struct proghdr ph;
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
+  struct addrspace *old_as = p->as;
+  int exec_reserved = 0;
+  int op_active = 0;
+
+  // Policy: exec is allowed only after sibling threads have been joined.
+  // Reserve the group while checking so clone either publishes first (and is
+  // observed here) or sees execing and fails before publication.
+  if (old_as == 0)
+    return -1;
+  acquire(&old_as->group_lock);
+  if (p->as != old_as || old_as->execing || old_as->exiting) {
+    release(&old_as->group_lock);
+    return -1;
+  }
+  acquire(&old_as->lock);
+  int has_siblings = old_as->refcount > 1;
+  release(&old_as->lock);
+  if (has_siblings) {
+    release(&old_as->group_lock);
+    return -1;
+  }
+  old_as->execing = 1;
+  exec_reserved = 1;
+  release(&old_as->group_lock);
 
   begin_op();
+  op_active = 1;
 
   // Open the executable file.
   if ((ip = namei(path)) == 0) {
-    end_op();
-    return -1;
+    goto bad;
   }
   ilock(ip);
 
@@ -85,6 +109,7 @@ kexec(char *path, char **argv)
   }
   iunlockput(ip);
   end_op();
+  op_active = 0;
   ip = 0;
 
   p = myproc();
@@ -144,7 +169,10 @@ kexec(char *path, char **argv)
   new_as->pagetable = pagetable;
   new_as->sz = sz;
 
+  acquire(&old_as->group_lock);
   as_replace_on_exec(p, new_as);
+  release(&old_as->group_lock);
+  exec_reserved = 0;
   p->trapframe->epc = elf.entry; // initial program counter = ulib.c:start()
   p->trapframe->sp = sp;         // initial stack pointer
   (void)oldpagetable;
@@ -156,7 +184,13 @@ bad:
     proc_freepagetable(pagetable, sz, THREAD_TRAPFRAME(0));
   if (ip) {
     iunlockput(ip);
+  }
+  if (op_active)
     end_op();
+  if (exec_reserved) {
+    acquire(&old_as->group_lock);
+    old_as->execing = 0;
+    release(&old_as->group_lock);
   }
   return -1;
 }

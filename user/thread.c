@@ -116,30 +116,26 @@ thread_create(void *(*start_routine)(void *), void *arg)
 void
 thread_exit(void *retval)
 {
-  // Gọi trực tiếp exit() với mã trạng thái
-  exit((int)(uint64)retval);
+  // Use the dedicated kernel thread-exit syscall so RV64 return values are
+  // preserved instead of being truncated to the process exit-status int.
+  thread_exit_sys((uint64)retval);
 }
 
 int
 thread_join(int tid, void **retval)
 {
-  void *joined_stack = 0;
-  
-  // Gọi hàm hệ thống join(void **stack) của kernel
-  int reaped_tid = join(&joined_stack);
+  uint64 result = 0;
+
+  int reaped_tid = join(tid, retval ? &result : 0);
   if (reaped_tid < 0)
     return -1;
 
   // Tìm và giải phóng vùng stack đã cấp phát heap tương ứng
   mutex_lock(&table_lock);
   for (int i = 0; i < MAX_USER_THREADS; i++) {
-    // Nếu tid khớp hoặc joined_stack khớp với vùng nhớ của thread
-    if (thread_table[i].tid == reaped_tid || 
-       (joined_stack >= thread_table[i].stack_bottom && 
-        joined_stack <= thread_table[i].stack_bottom + THREAD_STACK_SIZE)) {
-      if (retval != 0) {
-        *retval = thread_table[i].retval;
-      }
+    if (thread_table[i].tid == reaped_tid) {
+      if (retval != 0)
+        *retval = (void *)result;
       free(thread_table[i].stack_bottom);
       thread_table[i].stack_bottom = 0;
       thread_table[i].tid = 0;
