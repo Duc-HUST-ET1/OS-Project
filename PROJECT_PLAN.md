@@ -24,9 +24,9 @@
 | B | B-01 | Kernel thread lifecycle design | 8 | A-01 | A | clone/join semantics documented | Not started |
 | B | B-02 | Thread/process state and exit semantics | 10 | B-01 | A | `exit`, `kill`, `wait` interactions documented | Not started |
 | B | B-03 | Thread reaping and join implementation | 12 | B-02 | A | Correct lifecycle and reaping rules | Not started |
-| C | C-01 | User thread library API design | 6 | B-01 | A | User-visible API and syscall boundaries defined | Not started |
-| C | C-02 | Mutex primitive and RISC-V atomics | 8 | C-01 | B | Mutex correctness rules and atomic use documented | Not started |
-| C | C-03 | Stress harness and benchmark plan | 10 | B-03, C-02 | A | Functional and benchmark tests defined | Not started |
+| C | C-01 | User thread library API design | 6 | B-01 | A | User-visible API and syscall boundaries defined | Completed |
+| C | C-02 | Mutex primitive and RISC-V atomics | 8 | C-01 | B | Mutex correctness rules and atomic use documented | Completed |
+| C | C-03 | Stress harness and benchmark plan | 10 | B-03, C-02 | A | Functional and benchmark tests defined | Completed |
 
 ## Risk log
 
