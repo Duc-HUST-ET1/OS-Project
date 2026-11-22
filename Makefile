@@ -158,6 +158,7 @@ UPROGS=\
 	$U/_parallel_sum\
 	$U/_leaktest\
 	$U/_lifecyclecheck\
+	$U/_killrace\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

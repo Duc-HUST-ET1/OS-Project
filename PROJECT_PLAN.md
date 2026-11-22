@@ -1,18 +1,32 @@
 # Project 26105 workload tracker
 
-## Project schedule
+## Progress snapshot
 
-| Week | Deliverable | Owner | Reviewer |
+**Baseline checked:** integrated `riscv` branch at merge commit `eb4d94a` (PR #13), 15 Nov 2026. The implementation work originally scheduled for Weeks 6–7 is already integrated, putting the team about 1–2 weeks ahead on implementation. The Week 5 midterm checkpoint remains the next course milestone; Weeks 5–7 should now focus on demonstration, integrated verification, review, and stabilization.
+
+| Member | Integrated progress on `riscv` | Evidence present | Assessment |
 | --- | --- | --- | --- |
-| 1 | Repository setup and build environment | All | All |
-| 2 | Design proposal draft | All | All |
-| 3 | Design review and 2–3 page proposal | All | All |
-| 4 | Memory and lifecycle specification complete | A/B | B/A |
-| 5 | Midterm checkpoint and demo | All | All |
-| 6 | User-thread library prototype | C | A/B |
-| 7 | Kernel thread implementation + tests | A/B | B/A |
-| 8 | Code freeze and final tag | All | All |
-| 9 | Final demo and report | All | All |
+| A — Đỗ Trọng Nam (20233541) | Shared `addrspace`, per-context trapframe slots, reference counting, shared-page-table growth, worker-thread `fork`/`exec` paths, and cleanup fixes. | `kernel/addrspace.c`, `kernel/addrspace.h`, `kernel/vm.c`, `user/leaktest.c`; leak test covers 1,000 sequential clone/join cycles, 400 threads in batches, heap grow/shrink, and 20 worker fork/exec rounds. | Core implementation is integrated and the leak test passed on CPUS=4. Re-run on the final demo image and review the refcount/cleanup paths. |
+| B — Trần Anh Đức (20233337) | Kernel thread create/exit/join; exact-TID join with 64-bit retval; process-group kill/exit; wait/thread separation; worker-context fork policy; exec rejection with live siblings; group lock for clone/exec/exit admission. | `kernel/proc.c`, `kernel/exec.c`, lifecycle gate in `kernel/addrspace.*`, syscall files, `user/clonecheck.c`, `user/lifecyclecheck.c`; lifecyclecheck 7/7 and `usertests -q` passed on CPUS=4. | R3/R4 implementation and primary policy checks complete. Prepare the Week 5 demo and cross-review lock/reap paths. |
+| C — Đỗ Phương Điệp (20233315) | User thread library and trampoline, atomic mutex, thread functional test, and parallel reduction benchmark for 1/2/4/8 workers. | `user/thread.c`, `user/thread.h`, `user/threadtest.c`, `user/parallel_sum.c`; benchmark matrix reports CPUS=1/4 results, and threadtest covers return value 42 plus the 4 × 10,000 mutex counter. | Prototype and benchmark are integrated. Tick resolution is coarse, so strengthen or repeat timing measurements before treating speedup values as final. |
+
+### Test ownership note
+
+`threadtest.c` currently contains Test 1 and Test 2. The 1,000-cycle clone/join stress test is in `user/leaktest.c` and belongs to A's address-space/resource-lifetime evidence. Do not attribute that test to `threadtest` or to Member C unless the test source is changed.
+
+## Rebased project schedule
+
+| Week | Revised target | Status / timing |
+| --- | --- | --- |
+| 1 | Repository and build environment | Complete |
+| 2 | Design proposal and ownership/API decisions | Complete |
+| 3 | Architecture review and lifecycle/address-space design | Complete |
+| 4 | Integrated kernel lifecycle, shared address space, user library, and first tests | Complete; implementation stage reached about 1–2 weeks ahead of the original Week 6–7 coding schedule |
+| 5 | Midterm checkpoint; demo integrated thread lifecycle and benchmark; capture final CPUS=4 evidence; review coverage matrix | Next milestone |
+| 6 | Stabilization sprint: resolve review findings, rerun A/B/C-owned tests on merged `riscv`, improve benchmark timing confidence | Pull forward integration hardening |
+| 7 | Target code-freeze candidate; full regression, documentation, and final acceptance review | Target one week ahead of original Week 8 freeze |
+| 8 | Buffer for freeze findings, fixes, and final report | Schedule buffer |
+| 9 | Official final demo and report | Keep course deadline |
 
 ## Workload tracker
 
@@ -45,4 +59,4 @@
 
 ## Notes
 
-The table above is an initial planning estimate. Actual hours should be tracked weekly and the workload rebalance should be adjusted if one member is overloaded or if a design issue delays the plan.
+The original schedule was an initial estimate. Current status is based on code and test artifacts integrated into `riscv` as of merge PR #13, not on planned tasks alone. The Week 5 checkpoint date remains fixed; the team is using the early implementation progress to move stabilization and freeze readiness forward.
