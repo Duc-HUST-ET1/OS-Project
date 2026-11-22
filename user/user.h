@@ -30,6 +30,7 @@ int procinfo(void);
 int clone(void(*fcn)(void*), void *arg, void *stack);
 int join(int tid, uint64 *retval);
 void thread_exit_sys(uint64 retval) __attribute__((noreturn));
+uint64 freepages(void);
 
 // ulib.c
 int stat(const char *, struct stat *);

@@ -7,6 +7,8 @@
 #include "syscall.h"
 #include "defs.h"
 
+extern uint64 sys_freepages(void);
+
 // Fetch the uint64 at addr from the current process.
 int
 fetchaddr(uint64 addr, uint64 *ip)
@@ -167,6 +169,7 @@ static uint64 (*syscalls[])(void) = {
   [SYS_hello] sys_hello,
   [SYS_procinfo] sys_procinfo,
   [SYS_clone]   sys_clone,
+  [SYS_freepages] sys_freepages,
   // clang-format on
 };
 

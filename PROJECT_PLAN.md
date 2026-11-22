@@ -31,32 +31,31 @@
 ## Workload tracker
 
 | Member | Task ID | Description | Estimated hours | Dependencies | Reviewer | Acceptance criteria | Status |
-| --- | --- | --- | ---: | --- | --- | --- | --- |
-| A | A-01 | Environment and repo setup; upstream validation | 3 | None | B | Build instructions work on the team setup; integrated `riscv` builds | Complete |
-| A | A-02 | Shared address-space and page-table ownership | 8 | A-01 | B | `addrspace`, per-thread trapframes, reference-count and ownership paths integrated | Complete |
-| A | A-03 | Resource lifetime, lazy allocation, and leak checks | 10 | A-02 | B | Leaktest covers sequential/batched clone-join, heap changes, and worker fork/exec; rerun on final demo image | Implemented; CPUS=4 run passed, final demo rerun planned |
-| B | B-01 | Kernel thread lifecycle and syscall contract | 8 | A-01 | A | Clone, exact-TID join, thread exit, retval width, and lifecycle rules documented | Complete |
-| B | B-02 | Thread/process state and exit policies | 10 | B-01 | A | `kill`, `wait`, `fork`, `exec`, and group shutdown behavior implemented and documented | Complete |
-| B | B-03 | Reaping, clone/exec exclusion, and policy verification | 12 | B-02 | A | Group lock/reservation integrated; lifecyclecheck 7/7; `usertests -q` passes | Complete; demo and cross-review planned |
-| C | C-01 | User thread library API and trampoline | 6 | B-01 | A | Create/join/exit library path integrated with the kernel ABI | Complete |
-| C | C-02 | Mutex primitive and RISC-V atomics | 8 | C-01 | B | Acquire/release mutex works; threadtest Test 1–2 pass | Complete |
-| C | C-03 | Stress harness and benchmark | 10 | B-03, C-02 | A | Benchmark checks result against baseline on CPUS=1/4; timing confidence reviewed | Implemented; repeat/increase workload before final performance claims |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | A-01 | Environment and repo setup; upstream validation | 3 | None | B | Build environment documented and upstream repo confirmed | In progress |
+| A | A-02 | Memory and page-table ownership design | 8 | A-01 | B | Design note complete, invariants stated | Not started |
+| A | A-03 | Reference-counted resource lifetime checks | 10 | A-02 | B | Leak checks and cleanup paths described | Not started |
+| B | B-01 | Kernel thread lifecycle design | 8 | A-01 | A | clone/join semantics documented | Not started |
+| B | B-02 | Thread/process state and exit semantics | 10 | B-01 | A | `exit`, `kill`, `wait` interactions documented | Not started |
+| B | B-03 | Thread reaping and join implementation | 12 | B-02 | A | Correct lifecycle and reaping rules | Not started |
+| C | C-01 | User thread library API design | 6 | B-01 | A | User-visible API and syscall boundaries defined | Completed |
+| C | C-02 | Mutex primitive and RISC-V atomics | 8 | C-01 | B | Mutex correctness rules and atomic use documented | Completed |
+| C | C-03 | Stress harness and benchmark plan | 10 | B-03, C-02 | A | Functional and benchmark tests defined | Completed |
 
-## Week 5 focus by member
+## Risk log
 
-| Owner | Week 5 to-do | Evidence / exit condition |
-| --- | --- | --- |
-| A | Re-run `leaktest` on the integrated demo image; review page-table/reference-count cleanup and worker fork/exec behavior. | Test output shows the 1,000-cycle, batch, heap, and 20-round worker fork/exec checks passing; record CPUS and command. |
-| B — Trần Anh Đức (20233337) | Prepare and present the kernel lifecycle policy; demonstrate `lifecyclecheck` and the integrated regression suite; cross-review group-lock and reap paths with A. | `lifecyclecheck` reports 7/7 policy checks and `usertests -q` reports `ALL TESTS PASSED` on CPUS=4; report explains `kill/wait/fork/exec` and clone/exec exclusion. |
-| C | Re-run `threadtest` and `parallel_sum`; reconcile benchmark values with timer resolution and ensure the report's test names match the source. | Threadtest Test 1–2 pass; benchmark totals match baseline; record CPUS, workers, ticks, and limitations. |
-| All | Rehearse the midterm demo and update the test coverage matrix/Definition of Done from actual outputs. | Demo sequence and owner for each test are documented; no test is attributed to the wrong member. |
+- Unclear relationship between thread groups and process lifetime
+- Risk of page-table double free during exit or join
+- Lock-order inversions between process metadata and memory bookkeeping
+- User-level mutex misuse due to incorrect atomic use
+- CI environment may not provide the required toolchain and QEMU
 
-## Risks and mitigation
+## Mitigation
 
-- **Clone/exec race coverage:** the lock/reservation is implemented; lifecyclecheck stresses the public policy but does not force every internal interleaving. Cross-review the lock order and consider a deterministic synchronization test if time permits.
-- **Benchmark precision:** tick-level timing is coarse, especially for short runs. Increase workload or use a finer timer before making strong efficiency claims.
-- **Test attribution:** `threadtest` checks the user thread/mutex path; `leaktest` checks address-space/resource lifetime; `lifecyclecheck` checks B's kernel lifecycle policy; `usertests -q` is the integrated kernel regression suite.
-- **Integration drift:** all owners rerun their relevant test on the merged `riscv` branch before the demo and record the exact command, CPU count, and final output.
+- Document invariants before implementation
+- Require cross-review for every significant code change
+- Keep test and benchmark plans explicit and reproducible
+- Use the upstream build as the baseline and avoid silent semantic changes
 
 ## Notes
 
