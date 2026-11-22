@@ -932,6 +932,7 @@ kkill(int pid)
   struct proc *p;
   struct addrspace *as = 0;
   int tgid = -1;
+  int valid = 0;
 
   if (pid == 0)
     return -1;
@@ -949,7 +950,39 @@ kkill(int pid)
   if (tgid < 0)
     return -1;
 
-  request_group_exit(tgid, as);
+  // The first lookup only discovers the address-space descriptor. It may be
+  // reaped before we acquire its group gate, so revalidate the exact pid,
+  // group, and descriptor while holding group_lock and the proc lock. This
+  // also keeps a reused addrspace slot from receiving a stale kill request.
+  acquire(&as->group_lock);
+  acquire(&p->lock);
+  if (p->pid == pid && p->tgid == tgid && p->as == as &&
+      p->state != UNUSED) {
+    acquire(&as->lock);
+    if (as->valid && as->refcount > 0) {
+      as->exiting = 1;
+      as->execing = 0;
+      valid = 1;
+    }
+    release(&as->lock);
+  }
+  release(&p->lock);
+  release(&as->group_lock);
+
+  if (!valid)
+    return -1;
+
+  // Do not retain the descriptor past the gate: the group may finish exit
+  // and release its address space while this scan marks its contexts killed.
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state != UNUSED && p->tgid == tgid && p->state != ZOMBIE) {
+      p->killed = 1;
+      if (p->state == SLEEPING)
+        p->state = RUNNABLE;
+    }
+    release(&p->lock);
+  }
   return 0;
 }
 
