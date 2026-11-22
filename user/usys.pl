@@ -49,3 +49,4 @@ entry("procinfo");
 entry("clone");
 entry("join");
 entry("thread_exit_sys", "thread_exit");
+entry("freepages");

@@ -179,3 +179,10 @@ sys_thread_exit(void)
   argaddr(0, &retval);
   kthread_exit(retval);
 }
+extern uint64 kalloc_countfree(void);
+
+uint64
+sys_freepages(void)
+{
+  return kalloc_countfree();
+}
