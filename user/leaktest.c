@@ -198,6 +198,147 @@ test5_slot_exhaustion_and_rollback(void)
 
   printf("  [PASS] Tran slot & rollback an toan tuyet doi! Khong ro ri RAM hay slot.\n\n");
 }
+// ============================================================================
+// [TEST 6 - TUAN 6] Kiem thu tranh chap dong thoi sbrk() + thoat 8 luong cung luc
+// Xac minh as->lock, growproc_lazy va as->refcount-- khong race/leak tren CPUS=4.
+// ============================================================================
+static void *
+concurrent_sbrk_worker(void *arg)
+{
+  int id = (int)(uint64)arg;
+  char *mem = sbrk(4096);
+  if (mem == (char *)-1) {
+    printf("  [FAIL] Worker %d: sbrk(4096) that bai!\n", id);
+    exit(1);
+  }
+
+  // Ghi va doc xac thuc de ep page fault (lazy_sbrk) va kiem tra khong de du lieu
+  mem[0] = (char)(id & 0xFF);
+  mem[4095] = (char)((id ^ 0x5A) & 0xFF);
+
+  if (mem[0] != (char)(id & 0xFF) || mem[4095] != (char)((id ^ 0x5A) & 0xFF)) {
+    printf("  [FAIL] Worker %d: Du lieu trang sbrk bi ghi de!\n", id);
+    exit(2);
+  }
+  return 0;
+}
+
+static void
+test6_concurrent_sbrk_and_exit(void)
+{
+  printf("[TEST 6] Kiem tra tranh chap sbrk() + thoat 8 luong dong thoi (10 dot = 80 luong)...\n");
+
+  int fp_before = (int)freepages();
+
+  int pid = fork();
+  if (pid < 0) {
+    printf("  [FAIL] Khong the fork cho Test 6!\n");
+    exit(1);
+  }
+  if (pid == 0) {
+    for (int r = 0; r < 10; r++) {
+      int tids[8];
+      for (int k = 0; k < 8; k++) {
+        tids[k] = thread_create(concurrent_sbrk_worker, (void *)(uint64)(r * 8 + k + 1));
+        if (tids[k] < 0) {
+          printf("  [FAIL] Dot %d: thread_create that bai o luong %d!\n", r, k);
+          exit(1);
+        }
+      }
+      for (int k = 0; k < 8; k++) {
+        if (thread_join(tids[k], 0) < 0) {
+          printf("  [FAIL] Dot %d: thread_join that bai o luong %d!\n", r, k);
+          exit(1);
+        }
+      }
+    }
+    exit(0);
+  }
+
+  int status = -1;
+  wait(&status);
+  if (status != 0) {
+    printf("  [FAIL] Test 6 ket thuc voi ma loi %d!\n", status);
+    exit(1);
+  }
+
+  int fp_after = (int)freepages();
+  printf("  -> Free pages (Test 6): before = %d, after = %d, diff = %d\n",
+         fp_before, fp_after, fp_after - fp_before);
+  if (fp_before != fp_after) {
+    printf("  [FAIL] Ro ri %d trang vat ly sau Test 6!\n", fp_before - fp_after);
+    exit(1);
+  }
+
+  printf("  [PASS] 80 luong sbrk() & exit() dong thoi an toan tuyet doi! Khong race, khong leak.\n\n");
+}
+
+// ============================================================================
+// [TEST 7 - TUAN 6] Kiem thu group kill() tren tien trinh da luong dang dung RAM
+// Xac minh as_release() thu hoi dung 1 lan khi ca nhom bi ngat giua chung.
+// ============================================================================
+static void *
+kill_target_worker(void *arg)
+{
+  char *buf = (char *)arg;
+  int idx = 0;
+  while (1) {
+    buf[idx % 4096] = (char)(idx & 0xFF);
+    idx += 64;
+    if ((idx % 4096) == 0)
+      pause(1);
+  }
+  return 0;
+}
+
+static void
+test7_group_kill_memory_reclaim(void)
+{
+  printf("[TEST 7] Kiem tra group kill() tren nhom 6 luong dang dung Heap (15 chu ky)...\n");
+
+  int fp_before = (int)freepages();
+
+  for (int r = 0; r < 15; r++) {
+    int pid = fork();
+    if (pid < 0) {
+      printf("  [FAIL] Round %d: fork that bai!\n", r);
+      exit(1);
+    }
+    if (pid == 0) {
+      char *shared_page = sbrk(4096 * 2);
+      if (shared_page == (char *)-1)
+        exit(1);
+      for (int k = 0; k < 6; k++) {
+        thread_create(kill_target_worker, (void *)shared_page);
+      }
+      while (1) {
+        pause(2);
+      }
+    }
+
+    // Cho cac luong con chay thuc su tren CPUS=4 roi kill ca nhom
+    pause(3);
+    if (kill(pid) < 0) {
+      printf("  [FAIL] Round %d: kill(%d) that bai!\n", r, pid);
+      exit(1);
+    }
+    int status = 0;
+    if (wait(&status) != pid) {
+      printf("  [FAIL] Round %d: wait() khong thu hoi dung leader pid=%d!\n", r, pid);
+      exit(1);
+    }
+  }
+
+  int fp_after = (int)freepages();
+  printf("  -> Free pages (Test 7): before = %d, after = %d, diff = %d\n",
+         fp_before, fp_after, fp_after - fp_before);
+  if (fp_before != fp_after) {
+    printf("  [FAIL] Ro ri %d trang vat ly sau group kill()!\n", fp_before - fp_after);
+    exit(1);
+  }
+
+  printf("  [PASS] 15 chu ky group kill() thu hoi sach 100%% RAM, khong double-free/deadlock!\n\n");
+}
 
 static void
 run_all_tests(void)
@@ -281,6 +422,8 @@ run_all_tests(void)
 
   // TEST 5: Trapframe slot exhaustion & rollback verification
   test5_slot_exhaustion_and_rollback();
+  test6_concurrent_sbrk_and_exit();
+  test7_group_kill_memory_reclaim();
 }
 
 int
@@ -318,6 +461,6 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  printf("=== [XAC THUC] TAT CA 5 BAI TEST RO RI BO NHO DEU PASS 100%%! ===\n");
+  printf("=== [XAC THUC] TAT CA 7 BAI TEST RO RI BO NHO DEU PASS 100%%! ===\n");
   exit(0);
 }
