@@ -3,87 +3,81 @@
 #include "user/user.h"
 #include "user/thread.h"
 
-#define NUM_THREADS 4
-#define ITERS_PER_THREAD 10000
+static struct mutex lock;
+static volatile int shared_counter = 0;
 
-volatile int shared_counter = 0;
-struct mutex my_lock;
+void* worker_func(void *arg) {
+  int val = (int)(uint64)arg;
+  printf("  [Thread] Running with arg = %d\n", val);
+  return (void*)(uint64)(val * 2);
+}
 
-// Worker routine tăng counter có bảo vệ bởi Mutex
-void*
-counter_worker(void *arg)
-{
-  for (int i = 0; i < ITERS_PER_THREAD; i++) {
-    mutex_lock(&my_lock);
+void* counter_worker(void *arg) {
+  for (int i = 0; i < 10000; i++) {
+    mutex_lock(&lock);
     shared_counter++;
-    mutex_unlock(&my_lock);
+    mutex_unlock(&lock);
   }
   return 0;
 }
 
-// Routine test truyền đối số và trả về
-void*
-simple_worker(void *arg)
-{
-  int val = (int)(uint64)arg;
-  printf("  [Thread] Running with arg = %d\n", val);
-  return (void *)(uint64)(val * 2);
+void* dummy_worker(void *arg) {
+  return 0;
 }
 
-int
-main(int argc, char *argv[])
-{
-  printf("=== BẮT ĐẦU KIỂM THỬ USER THREAD & MUTEX ===\n");
-  printf("Sinh viên thực hiện: Do Phuong Diep - MSSV: 20233315\n\n");
+int main(int argc, char *argv[]) {
+  printf("=== BAT DAU KIEM THU USER THREAD & MUTEX ===\n");
+  printf("Sinh vien thuc hien: Do Phuong Diep - MSSV: 20233315\n\n");
 
-  // ---------------------------------------------------------
-  // TEST 1: Tạo và Join luồng cơ bản
-  // ---------------------------------------------------------
-  printf("[TEST 1] Kiểm tra tạo luồng và nhận kết quả trả về:\n");
-  int tid1 = thread_create(simple_worker, (void *)21);
-  if (tid1 < 0) {
-    printf("  -> LỖI: thread_create thất bại!\n");
-    exit(1);
-  }
-  printf("  -> Thread tạo thành công, TID = %d\n", tid1);
-
+  // TEST 1: Tạo luồng và nhận kết quả
+  printf("[TEST 1] Kiem tra tao luong va nhan ket qua tra ve:\n");
+  int tid1 = thread_create(worker_func, (void*)21);
   void *retval = 0;
-  int reaped = thread_join(tid1, &retval);
-  printf("  -> Thread đã join xong: TID = %d, Retval = %d\n", reaped, (int)(uint64)retval);
-  if ((int)(uint64)retval == 42) {
-    printf("  [PASS] Test 1 hoàn tất!\n\n");
+  thread_join(tid1, &retval);
+  printf("  -> Thread da join xong: TID = %d, Retval = %d\n", tid1, (int)(uint64)retval);
+  if ((uint64)retval == 42) {
+    printf("[PASS] Test 1 hoan tat!\n\n");
   } else {
-    printf("  [FAIL] Test 1: Giá trị trả về không khớp (kỳ vọng 42)!\n\n");
+    printf("[FAIL] Test 1 that bai!\n\n");
   }
 
-  // ---------------------------------------------------------
-  // TEST 2: Kiểm thử tranh chấp vùng nhớ (Race Condition) với Mutex
-  // ---------------------------------------------------------
-  printf("[TEST 2] Kiểm tra đồng bộ Mutex (%d luồng x %d lần cộng):\n", NUM_THREADS, ITERS_PER_THREAD);
-  mutex_init(&my_lock);
+  // TEST 2: Kiểm tra đồng bộ Mutex
+  printf("[TEST 2] Kiem tra dong bo Mutex (4 luong x 10000 lan cong):\n");
+  mutex_init(&lock);
   shared_counter = 0;
-
-  int tids[NUM_THREADS];
-  for (int i = 0; i < NUM_THREADS; i++) {
+  int tids[4];
+  for (int i = 0; i < 4; i++) {
     tids[i] = thread_create(counter_worker, 0);
-    if (tids[i] < 0) {
-      printf("  -> LỖI: Không thể tạo luồng %d\n", i);
-      exit(1);
-    }
   }
-
-  for (int i = 0; i < NUM_THREADS; i++) {
+  for (int i = 0; i < 4; i++) {
     thread_join(tids[i], 0);
   }
-
-  int expected = NUM_THREADS * ITERS_PER_THREAD;
-  printf("  -> Giá trị cuối cùng của shared_counter = %d (Kỳ vọng: %d)\n", shared_counter, expected);
-  if (shared_counter == expected) {
-    printf("  [PASS] Test 2: Mutex amoswap bảo vệ tuyệt đối chính xác!\n\n");
+  printf("  -> Gia tri cuoi cung cua shared_counter = %d (Ky vong: 40000)\n", shared_counter);
+  if (shared_counter == 40000) {
+    printf("[PASS] Test 2: Mutex amoswap bao ve tuyet doi chinh xac!\n\n");
   } else {
-    printf("  [FAIL] Test 2: Xảy ra Race Condition!\n\n");
+    printf("[FAIL] Test 2 that bai!\n\n");
   }
 
-  printf("=== HOÀN TẤT TẤT CẢ CÁC BÀI TEST CHỨC NĂNG ===\n");
+  // TEST 3: Stress test 1.000 chu kỳ clone/join (Cổng R3)
+  printf("[TEST 3] Stress test tao va thu hoi 1000 chu ky luong lien tiep:\n");
+  int stress_ok = 1;
+  for (int i = 1; i <= 1000; i++) {
+    int tid = thread_create(dummy_worker, 0);
+    if (tid < 0) {
+      printf("  [FAIL] Khong the tao luong o chu ky %d!\n", i);
+      stress_ok = 0;
+      break;
+    }
+    thread_join(tid, 0);
+    if (i % 250 == 0) {
+      printf("  -> Da hoan tat %d / 1000 chu ky...\n", i);
+    }
+  }
+  if (stress_ok) {
+    printf("[PASS] Test 3: Vuot qua 1.000 chu ky, khong ro ri stack/proc!\n\n");
+  }
+
+  printf("=== HOAN TAT TAT CA CAC BAI TEST CHUC NANG ===\n");
   exit(0);
 }

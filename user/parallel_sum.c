@@ -4,7 +4,7 @@
 #include "user/thread.h"
 
 #define ARRAY_SIZE 100000
-#define COMPUTE_LOAD 1200
+#define COMPUTE_LOAD 4000
 
 static int array[ARRAY_SIZE];
 static long long global_sum = 0;
